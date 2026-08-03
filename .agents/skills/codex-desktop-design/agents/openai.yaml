@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Desktop Design"
+  short_description: "Design interfaces with the Codex desktop aesthetic"
+  default_prompt: "Use $codex-desktop-design to redesign this interface in the Codex desktop aesthetic."
