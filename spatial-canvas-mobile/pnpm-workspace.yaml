@@ -1,0 +1,9 @@
+allowBuilds:
+  electron: true
+  electron-winstaller: true
+  esbuild: true
+confirmModulesPurge: false
+onlyBuiltDependencies:
+  - electron
+  - electron-winstaller
+  - esbuild
