@@ -62,3 +62,53 @@ The combined comparison includes both full panels and a focused footer pair in t
 - [x] Build, ad-hoc sign, capture, compare, and visually inspect the native app.
 
 final result: passed
+
+# Mobile drawer design QA
+
+## Comparison target
+
+- source motion reference: `/Users/platonkmazarakis/Downloads/JoiHomeDemo.mp4`
+- extracted 16-frame motion summary: `/Users/platonkmazarakis/Documents/iagent/artifacts/mobile-drawer-reference.png`
+- iPhone 15 Pro resting state: `/Users/platonkmazarakis/Documents/iagent/artifacts/mobile-drawer-resting.png`
+- iPhone 15 Pro expanded state: `/Users/platonkmazarakis/Documents/iagent/artifacts/mobile-drawer-expanded.png`
+- iPhone SE resting state: `/Users/platonkmazarakis/Documents/iagent/artifacts/mobile-drawer-se-resting.png`
+- iPhone SE expanded state: `/Users/platonkmazarakis/Documents/iagent/artifacts/mobile-drawer-se-expanded.png`
+- source duration: `8.008s`, `720 x 720`, `29.97fps`
+- implementation viewports: iPhone 15 Pro and iPhone SE (3rd generation), iOS 17.5, dark appearance
+
+## Reference behavior
+
+- The masthead and briefing are stationary in the page background.
+- The list is a separate bottom drawer with a rounded upper edge.
+- At the resting detent, the drawer exposes the briefing and occupies the lower portion of the viewport.
+- An upward drag directly tracks the finger, then snaps the drawer below the masthead.
+- At the upper detent, the drawer covers the briefing and its list becomes independently scrollable.
+- A downward drag at the list's top edge returns the drawer to the resting detent.
+
+## Findings
+
+- No actionable P0, P1, or P2 visual differences remain.
+- The implementation intentionally keeps the app's existing dark sheet tokens instead of copying the reference's white drawer.
+- The top corners preserve the existing `42pt` continuous radius through both detents and during interpolation.
+- The fixed bottom dock remains outside the drawer, matching the reference's persistent create control.
+- The compact viewport preserves the same hierarchy without text overlap or drawer/dock collision.
+
+## Motion and interaction
+
+- The drawer uses direct vertical translation while dragging and the app's established `cubic-bezier(0.165, 0.84, 0.44, 1)` equivalent for its `0.3s` snap.
+- Predicted gesture travel allows a short, decisive flick to change detents while a partial drag returns to its origin.
+- Horizontal intent is ignored by the drawer so the root tab pager remains available.
+- The inner list is disabled at rest and enabled only at the upper detent.
+- At the upper detent, downward movement transfers to the drawer only when the list is at its top boundary; otherwise the list retains scrolling.
+- Native pull-to-refresh was removed from these surfaces because it competes with the required downward-collapse gesture. Background sync and the existing explicit Sync action remain available.
+
+## Verification
+
+- [x] Today, Codex, Notes, and Todos no longer wrap hero and list in one page-level scroll view.
+- [x] Shared drawer compiles under Swift 6 concurrency checks.
+- [x] Debug iOS Simulator build succeeds for iOS 17.5.
+- [x] Resting and expanded states were captured on iPhone 15 Pro.
+- [x] Resting and expanded states were captured on iPhone SE (3rd generation).
+- [x] Shared Swift sync test passes (`1` test, `0` failures).
+
+final result: passed

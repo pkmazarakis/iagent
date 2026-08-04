@@ -30,6 +30,8 @@
 	<string>iAgent uses the microphone to transcribe prompts, local notes, and meetings you explicitly start recording.</string>
   <key>NSCalendarsFullAccessUsageDescription</key>
   <string>iAgent reads today’s Apple Calendar events to build your private daily briefing.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>iAgent reads saved meeting links from today’s Apple Calendar events so you can join them from the panel.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
 	<string>iAgent uses speech recognition to turn live dictation and meetings you explicitly record into local notes.</string>
 </dict>

@@ -3,6 +3,7 @@ import Carbon
 import Combine
 import QuartzCore
 import SwiftUI
+import iAgentCore
 
 private enum PanelMetrics {
     static let notchSize = NSSize(width: 210, height: 38)
@@ -356,6 +357,7 @@ final class PanelController: ObservableObject {
     @Published private(set) var completingTodoIDs: Set<UUID> = []
     @Published private(set) var fadingTodoIDs: Set<UUID> = []
     @Published private(set) var showingPastTodos = false
+    @Published private(set) var cloudSyncStatus = IAgentCloudSyncStatus()
     private(set) var lastOpenedThreadID: String?
 
     let dictation = SpeechDictationService()
@@ -381,10 +383,16 @@ final class PanelController: ObservableObject {
     private var focusEndsAt: Date?
     private var noteAutosaveTask: Task<Void, Never>?
     private var todoCompletionTasks: [UUID: Task<Void, Never>] = [:]
+    private var desktopSyncTimer: Timer?
+    private var desktopSyncDebounceTask: Task<Void, Never>?
+    private var desktopSyncInFlight = false
+    private var desktopSyncFetchPending = false
+    private var hasLoadedThreads = false
     private var loadedThreadLimit = 200
     private let fileMonitor = CodexFileMonitor()
     private let documentStore: LocalDocumentStore
     private let todoStore: LocalTodoStore
+    private let desktopSync: DesktopSyncCoordinator
     private let projectPreferences: ProjectSectionPreferenceStore
     private let codexClient = CodexAppServerClient()
     private let codexDesktopSender = CodexDesktopPromptSender()
@@ -577,6 +585,10 @@ final class PanelController: ObservableObject {
         documentStore = localDocumentStore
         meetingCapture = MeetingCaptureService(documentStore: localDocumentStore)
         todoStore = LocalTodoStore(rootURL: localDocumentStore.rootURL)
+        desktopSync = DesktopSyncCoordinator(
+            documentStore: localDocumentStore,
+            smokeTest: smokeTest
+        )
         if smokeTest {
             try? FileManager.default.removeItem(at: todoStore.fileURL)
             try? FileManager.default.removeItem(at: todoStore.listFileURL)
@@ -599,6 +611,7 @@ final class PanelController: ObservableObject {
         }
         calendarService.onChange = { [weak self] in
             self?.resizeExpandedPanel()
+            self?.scheduleDesktopSync(fetchRemote: false)
         }
     }
 
@@ -608,6 +621,7 @@ final class PanelController: ObservableObject {
     }
 
     func startThreadUpdates() {
+        calendarService.start()
         refreshThreads()
         refreshTimer?.invalidate()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -616,12 +630,27 @@ final class PanelController: ObservableObject {
             }
         }
         refreshTimer?.tolerance = 0.1
+
+        desktopSyncTimer?.invalidate()
+        let timer = Timer(timeInterval: 15, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.scheduleDesktopSync(fetchRemote: true, delay: .zero)
+            }
+        }
+        timer.tolerance = 2
+        RunLoop.main.add(timer, forMode: .common)
+        desktopSyncTimer = timer
+        scheduleDesktopSync(fetchRemote: true, delay: .milliseconds(350))
     }
 
     func stopThreadUpdates() {
         cancelFrameAnimation()
         noteAutosaveTask?.cancel()
         noteAutosaveTask = nil
+        desktopSyncDebounceTask?.cancel()
+        desktopSyncDebounceTask = nil
+        desktopSyncTimer?.invalidate()
+        desktopSyncTimer = nil
         if contentMode == .note {
             saveLocalDocument(kind: .note, announce: false)
         }
@@ -634,6 +663,7 @@ final class PanelController: ObservableObject {
         meetingCapture.shutdown()
         codexClient.stop()
         calendarService.stop()
+        Task { await desktopSync.stop() }
         focusTimer?.invalidate()
         focusTimer = nil
     }
@@ -663,6 +693,7 @@ final class PanelController: ObservableObject {
             self.refreshInFlight = false
             switch result {
             case let .success(loaded):
+                self.hasLoadedThreads = true
                 self.referenceNow = Date()
                 self.resizeExpandedPanel()
                 if self.threads != loaded.threads {
@@ -690,6 +721,7 @@ final class PanelController: ObservableObject {
                 {
                     self.selectedThreadID = nil
                 }
+                self.scheduleDesktopSync(fetchRemote: false)
             case let .failure(error):
                 if self.loadError != error.localizedDescription {
                     self.loadError = error.localizedDescription
@@ -712,12 +744,119 @@ final class PanelController: ObservableObject {
         }
     }
 
+    private func scheduleDesktopSync(
+        fetchRemote: Bool,
+        delay: Duration = .milliseconds(650)
+    ) {
+        desktopSyncFetchPending = desktopSyncFetchPending || fetchRemote
+        desktopSyncDebounceTask?.cancel()
+        desktopSyncDebounceTask = Task { [weak self] in
+            if delay > .zero {
+                try? await Task.sleep(for: delay)
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.performDesktopSync()
+        }
+    }
+
+    private func performDesktopSync() {
+        guard !desktopSyncInFlight else {
+            desktopSyncFetchPending = true
+            return
+        }
+
+        let fetchRemote = desktopSyncFetchPending
+        desktopSyncFetchPending = false
+        desktopSyncInFlight = true
+        let input = DesktopSyncInput(
+            threads: hasLoadedThreads ? threads : nil,
+            calendarEvents: calendarService.accessState.canReadEvents
+                ? calendarService.events
+                : nil,
+            todos: todos,
+            todoListNames: todoListNames,
+            projectOrder: projectOrder
+        )
+
+        Task { [weak self] in
+            guard let self else { return }
+            let state = await self.desktopSync.synchronize(
+                input: input,
+                fetchRemote: fetchRemote
+            )
+            self.applyDesktopSyncState(state, basedOn: input)
+            self.desktopSyncInFlight = false
+            if self.desktopSyncFetchPending {
+                self.scheduleDesktopSync(fetchRemote: true, delay: .milliseconds(200))
+            }
+        }
+    }
+
+    private func applyDesktopSyncState(
+        _ state: DesktopWritableSyncState,
+        basedOn input: DesktopSyncInput
+    ) {
+        let inputTodos = Dictionary(uniqueKeysWithValues: input.todos.map { ($0.id, $0) })
+        let currentTodos = Dictionary(uniqueKeysWithValues: todos.map { ($0.id, $0) })
+        let locallyDeletedIDs = Set(inputTodos.keys).subtracting(currentTodos.keys)
+        var mergedTodos = Dictionary(uniqueKeysWithValues: state.todos.map { ($0.id, $0) })
+
+        for id in locallyDeletedIDs {
+            mergedTodos.removeValue(forKey: id)
+        }
+        for current in todos {
+            if let remote = mergedTodos[current.id] {
+                if current.updatedAt > remote.updatedAt {
+                    mergedTodos[current.id] = current
+                }
+            } else if let captured = inputTodos[current.id] {
+                if current.updatedAt > captured.updatedAt {
+                    mergedTodos[current.id] = current
+                }
+            } else {
+                mergedTodos[current.id] = current
+            }
+        }
+
+        let nextTodos = mergedTodos.values.sorted { $0.createdAt > $1.createdAt }
+        if nextTodos != todos {
+            todos = nextTodos
+            try? todoStore.save(nextTodos)
+            resizeExpandedPanel()
+        }
+
+        let nextListNames = Self.mergedTodoListNames(
+            local: savedTodoListNames,
+            remote: state.todoListNames
+        )
+        if nextListNames != savedTodoListNames {
+            savedTodoListNames = nextListNames
+            try? todoStore.saveListNames(nextListNames)
+        }
+        cloudSyncStatus = state.status
+    }
+
+    private static func mergedTodoListNames(
+        local: [String],
+        remote: [String]
+    ) -> [String] {
+        var seen: Set<String> = []
+        return (remote + local).filter { name in
+            let key = name.folding(
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: .current
+            )
+            return seen.insert(key).inserted
+        }
+    }
+
     private func reconcileProjectOrder() {
         let sectionIDs = ThreadProjectSection.build(from: threads, excluding: []).map(\.id)
         let nextOrder = ProjectSectionPreferenceStore.appendingNewIDs(sectionIDs, to: projectOrder)
         guard nextOrder != projectOrder else { return }
         projectOrder = nextOrder
         projectPreferences.saveOrder(nextOrder)
+        scheduleDesktopSync(fetchRemote: false)
     }
 
     func toggleProjectSection(_ sectionID: String) {
@@ -767,6 +906,7 @@ final class PanelController: ObservableObject {
         let hiddenIDs = projectOrder.filter { !visibleIDs.contains($0) }
         projectOrder = reordered + hiddenIDs
         projectPreferences.saveOrder(projectOrder)
+        scheduleDesktopSync(fetchRemote: false)
         return true
     }
 
@@ -1086,6 +1226,7 @@ final class PanelController: ObservableObject {
             todoCompletionTasks[id] = nil
             todos[index].isCompleted = false
             todos[index].completedAt = nil
+            todos[index].updatedAt = Date()
             withAnimation(.easeOut(duration: 0.16)) {
                 completingTodoIDs.remove(id)
                 fadingTodoIDs.remove(id)
@@ -1097,6 +1238,7 @@ final class PanelController: ObservableObject {
 
         todos[index].isCompleted = true
         todos[index].completedAt = Date()
+        todos[index].updatedAt = Date()
         completingTodoIDs.insert(id)
         saveTodos()
 
@@ -1132,6 +1274,7 @@ final class PanelController: ObservableObject {
     func toggleTodoStar(_ id: UUID) {
         guard let index = todos.firstIndex(where: { $0.id == id }) else { return }
         todos[index].isStarred.toggle()
+        todos[index].updatedAt = Date()
         saveTodos()
     }
 
@@ -1148,6 +1291,7 @@ final class PanelController: ObservableObject {
     func setTodoDueDate(_ id: UUID, dueDate: Date?) {
         guard let index = todos.firstIndex(where: { $0.id == id }) else { return }
         todos[index].dueDate = dueDate.map(Calendar.autoupdatingCurrent.startOfDay(for:))
+        todos[index].updatedAt = Date()
         saveTodos()
     }
 
@@ -1155,6 +1299,7 @@ final class PanelController: ObservableObject {
         guard let index = todos.firstIndex(where: { $0.id == id }) else { return }
         let normalized = listName?.trimmingCharacters(in: .whitespacesAndNewlines)
         todos[index].listName = normalized?.isEmpty == false ? normalized : nil
+        todos[index].updatedAt = Date()
         rememberTodoList(normalized)
         saveTodos()
     }
@@ -1197,6 +1342,7 @@ final class PanelController: ObservableObject {
         do {
             try todoStore.save(todos)
             statusMessage = nil
+            scheduleDesktopSync(fetchRemote: false)
         } catch {
             statusMessage = "Could not save todos: \(error.localizedDescription)"
         }
@@ -1206,6 +1352,7 @@ final class PanelController: ObservableObject {
         do {
             try todoStore.saveListNames(savedTodoListNames)
             statusMessage = nil
+            scheduleDesktopSync(fetchRemote: false)
         } catch {
             statusMessage = "Could not save todo lists: \(error.localizedDescription)"
         }
@@ -1488,6 +1635,7 @@ final class PanelController: ObservableObject {
             editorTitle = document.title
             noteSaveState = .saved
             statusMessage = nil
+            scheduleDesktopSync(fetchRemote: false)
             return true
         } catch {
             let message = error.localizedDescription
@@ -1868,10 +2016,14 @@ final class PanelController: ObservableObject {
 
     func stopMeetingCapture() {
         guard meetingCapture.isActive else { return }
+        let event = meetingCapture.currentEvent
+        let startedAt = Date().addingTimeInterval(-meetingCapture.elapsed)
         Task { [weak self] in
             guard let self,
                   let note = await self.meetingCapture.stop()
             else { return }
+
+            let endedAt = Date()
 
             self.lastSavedDocument = note
             self.editorTitle = note.title
@@ -1885,6 +2037,14 @@ final class PanelController: ObservableObject {
             self.statusMessage = nil
             self.setExpanded(true, source: "meeting-note")
             self.requestNoteEditorFocus()
+            Task {
+                await self.desktopSync.publishMeeting(
+                    document: note,
+                    event: event,
+                    startedAt: startedAt,
+                    endedAt: endedAt
+                )
+            }
         }
     }
 
@@ -2219,12 +2379,19 @@ final class PanelController: ObservableObject {
             throw SmokeError("Could not encode PNG.")
         }
 
-        let artifacts = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent("artifacts", isDirectory: true)
-        try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-        let url = artifacts.appendingPathComponent(filename)
+        let url = try artifactURL(named: filename)
         try data.write(to: url)
         return url
+    }
+
+    private func artifactURL(named filename: String) throws -> URL {
+        let bundleParent = Bundle.main.bundleURL.deletingLastPathComponent()
+        let repositoryRoot = bundleParent.lastPathComponent == ".build"
+            ? bundleParent.deletingLastPathComponent()
+            : URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let artifacts = repositoryRoot.appendingPathComponent("artifacts", isDirectory: true)
+        try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+        return artifacts.appendingPathComponent(filename)
     }
 
     private func validateThreadPresentationLogic() throws {
@@ -2951,6 +3118,8 @@ final class PanelController: ObservableObject {
                           "Design review",
                           "Dinner with Maya",
                       ],
+                      self.calendarService.events.first?.linkURLs.first?.host
+                          == "meet.example.com",
                       abs(calendarFrame.height - self.expandedSize.height) <= 2,
                       calendarFrame.height > homeFrame.height,
                       abs(calendarFrame.maxY - screenFrame.maxY) <= 2
@@ -3347,6 +3516,7 @@ final class PanelController: ObservableObject {
                 guard let armedMeeting = self.recordableMeetingEvent,
                       self.compactCalendarEvent?.id == armedMeeting.id,
                       armedMeeting.title == "Roadmap sync",
+                      armedMeeting.linkURLs.first?.host == "meet.example.com",
                       armedMeeting.isHappening(at: self.calendarService.referenceNow)
                 else {
                     throw SmokeError("Expected the current meeting to expose its recording control.")
@@ -3538,6 +3708,70 @@ final class PanelController: ObservableObject {
                 print("[smoke] noteToolbarScreenshot=\(noteToolbarURL.path)")
                 print("[smoke] markdownEditorScreenshot=\(markdownEditorURL.path)")
                 print("[smoke] noteDictationScreenshot=\(noteURL.path)")
+                NSApp.terminate(nil)
+            } catch {
+                self.failSmoke(String(describing: error))
+            }
+        }
+    }
+
+    func runCalendarLiveTest(attempt: Int = 0) {
+        if attempt == 0 {
+            showCalendar()
+            setExpanded(true, source: "calendar-live-test", animated: false)
+            calendarService.refresh(forceReload: true)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            let waitingForCalendar = self.calendarService.accessState == .requesting
+                || self.calendarService.supplementalRefreshInFlight
+            if waitingForCalendar, attempt < 80 {
+                self.runCalendarLiveTest(attempt: attempt + 1)
+                return
+            }
+
+            do {
+                self.resizeExpandedPanel(animated: false)
+                let screenshotURL = try self.capturePNG(named: "iagent-calendar-live.png")
+                let mappedLines = self.calendarService.events.map { event in
+                    let links = event.linkURLs.map(\.absoluteString).joined(separator: ",")
+                    return "[calendar-live:mapped] title=\(event.title) "
+                        + "calendar=\(event.calendarTitle) links=[\(links)]"
+                }
+                mappedLines.forEach { print($0) }
+                let diagnosticLines = [
+                    "[calendar-live] access=\(String(describing: self.calendarService.accessState))",
+                    "[calendar-live] supplementalError=\(self.calendarService.supplementalRefreshError ?? "none")",
+                ] + self.calendarService.liveDiagnosticLines + mappedLines + [
+                    "[calendar-live] screenshot=\(screenshotURL.path)",
+                ]
+                let diagnosticURL = try self.artifactURL(named: "iagent-calendar-live.log")
+                try diagnosticLines.joined(separator: "\n").appending("\n").write(
+                    to: diagnosticURL,
+                    atomically: true,
+                    encoding: .utf8
+                )
+
+                guard self.calendarService.accessState == .granted else {
+                    throw SmokeError(
+                        "Calendar access is \(String(describing: self.calendarService.accessState)). "
+                            + "diagnostics=\(diagnosticURL.path)"
+                    )
+                }
+
+                guard let meeting = self.calendarService.events.first(where: {
+                    $0.title.localizedCaseInsensitiveCompare("Meeting") == .orderedSame
+                }) else {
+                    throw SmokeError("The live Calendar view did not contain the Meeting event.")
+                }
+                guard !meeting.linkURLs.isEmpty else {
+                    throw SmokeError(
+                        "Meeting rendered without an open-link URL. screenshot=\(screenshotURL.path)"
+                    )
+                }
+
+                print("[calendar-live] meetingLink=\(meeting.linkURLs[0].absoluteString)")
+                print("[calendar-live] screenshot=\(screenshotURL.path)")
                 NSApp.terminate(nil)
             } catch {
                 self.failSmoke(String(describing: error))
@@ -4667,8 +4901,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var visibilityHotKey: GlobalHotKey?
 
     func applicationDidFinishLaunching(_: Notification) {
-        NSApp.setActivationPolicy(.accessory)
         let isSmokeTest = CommandLine.arguments.contains("--smoke-test")
+        let isCalendarLiveTest = CommandLine.arguments.contains("--calendar-live-test")
+        NSApp.setActivationPolicy(isCalendarLiveTest ? .regular : .accessory)
+        if isCalendarLiveTest {
+            NSApp.activate(ignoringOtherApps: true)
+        }
 
         let panel = PanelWindow(
             contentRect: controller.targetFrame(expanded: false),
@@ -4795,7 +5033,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return handled ? nil : event
         }
 
-        if !isSmokeTest {
+        if !isSmokeTest && !isCalendarLiveTest {
             globalNotchMonitor = NSEvent.addGlobalMonitorForEvents(
                 matching: [.scrollWheel, .leftMouseDown]
             ) { [weak controller] event in
@@ -4815,6 +5053,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if isSmokeTest {
             controller.runSmokeTest()
+        } else if isCalendarLiveTest {
+            controller.runCalendarLiveTest()
         }
     }
 
