@@ -1,0 +1,346 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* iAgentMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* iAgentMobileApp.swift */; };
+		A10000000000000000000002 /* PanelTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* PanelTheme.swift */; };
+		A10000000000000000000003 /* MobileCalendarService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* MobileCalendarService.swift */; };
+		A10000000000000000000004 /* MobileMeetingRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* MobileMeetingRecorder.swift */; };
+		A10000000000000000000005 /* MobileAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* MobileAppModel.swift */; };
+		A10000000000000000000006 /* MobileRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* MobileRootView.swift */; };
+		A10000000000000000000007 /* TodayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* TodayView.swift */; };
+		A10000000000000000000008 /* CodexMobileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* CodexMobileView.swift */; };
+		A10000000000000000000009 /* NotesMobileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* NotesMobileView.swift */; };
+		A1000000000000000000000A /* TodosMobileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* TodosMobileView.swift */; };
+		A1000000000000000000000B /* MeetingRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* MeetingRecorderView.swift */; };
+		A1000000000000000000000C /* iAgentCore in Frameworks */ = {isa = PBXBuildFile; productRef = A90000000000000000000002 /* iAgentCore */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A20000000000000000000001 /* iAgentMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iAgentMobileApp.swift; sourceTree = "<group>"; };
+		A20000000000000000000002 /* PanelTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelTheme.swift; sourceTree = "<group>"; };
+		A20000000000000000000003 /* MobileCalendarService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileCalendarService.swift; sourceTree = "<group>"; };
+		A20000000000000000000004 /* MobileMeetingRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileMeetingRecorder.swift; sourceTree = "<group>"; };
+		A20000000000000000000005 /* MobileAppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileAppModel.swift; sourceTree = "<group>"; };
+		A20000000000000000000006 /* MobileRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRootView.swift; sourceTree = "<group>"; };
+		A20000000000000000000007 /* TodayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayView.swift; sourceTree = "<group>"; };
+		A20000000000000000000008 /* CodexMobileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexMobileView.swift; sourceTree = "<group>"; };
+		A20000000000000000000009 /* NotesMobileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesMobileView.swift; sourceTree = "<group>"; };
+		A2000000000000000000000A /* TodosMobileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodosMobileView.swift; sourceTree = "<group>"; };
+		A2000000000000000000000B /* MeetingRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingRecorderView.swift; sourceTree = "<group>"; };
+		A2000000000000000000000C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A2000000000000000000000D /* iAgentMobile.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iAgentMobile.entitlements; sourceTree = "<group>"; };
+		A2000000000000000000000E /* iAgent.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iAgent.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A30000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000000000000000000000C /* iAgentCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A40000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				A40000000000000000000002 /* iAgentMobile */,
+				A40000000000000000000008 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A40000000000000000000002 /* iAgentMobile */ = {
+			isa = PBXGroup;
+			children = (
+				A40000000000000000000003 /* App */,
+				A40000000000000000000004 /* Design */,
+				A40000000000000000000005 /* Model */,
+				A40000000000000000000006 /* Views */,
+				A40000000000000000000007 /* Resources */,
+			);
+			path = iAgentMobile;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000003 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000001 /* iAgentMobileApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000004 /* Design */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000002 /* PanelTheme.swift */,
+			);
+			path = Design;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000005 /* Model */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000005 /* MobileAppModel.swift */,
+				A20000000000000000000003 /* MobileCalendarService.swift */,
+				A20000000000000000000004 /* MobileMeetingRecorder.swift */,
+			);
+			path = Model;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000006 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000006 /* MobileRootView.swift */,
+				A20000000000000000000007 /* TodayView.swift */,
+				A20000000000000000000008 /* CodexMobileView.swift */,
+				A20000000000000000000009 /* NotesMobileView.swift */,
+				A2000000000000000000000A /* TodosMobileView.swift */,
+				A2000000000000000000000B /* MeetingRecorderView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000007 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A2000000000000000000000C /* Info.plist */,
+				A2000000000000000000000D /* iAgentMobile.entitlements */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000008 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A2000000000000000000000E /* iAgent.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A50000000000000000000001 /* iAgentMobile */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A70000000000000000000002 /* Build configuration list for PBXNativeTarget "iAgentMobile" */;
+			buildPhases = (
+				A30000000000000000000002 /* Sources */,
+				A30000000000000000000001 /* Frameworks */,
+				A30000000000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = iAgentMobile;
+			packageProductDependencies = (
+				A90000000000000000000002 /* iAgentCore */,
+			);
+			productName = iAgent;
+			productReference = A2000000000000000000000E /* iAgent.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A60000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2630;
+				LastUpgradeCheck = 2630;
+				TargetAttributes = {
+					A50000000000000000000001 = {
+						CreatedOnToolsVersion = 26.3;
+						ProvisioningStyle = Automatic;
+						SystemCapabilities = {
+							com.apple.BackgroundModes = { enabled = 1; };
+							com.apple.iCloud = { enabled = 1; };
+						};
+					};
+				};
+			};
+			buildConfigurationList = A70000000000000000000001 /* Build configuration list for PBXProject "iAgentMobile" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A40000000000000000000001;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A90000000000000000000001 /* XCLocalSwiftPackageReference ".." */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A40000000000000000000008 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A50000000000000000000001 /* iAgentMobile */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A30000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A30000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000001 /* iAgentMobileApp.swift in Sources */,
+				A10000000000000000000002 /* PanelTheme.swift in Sources */,
+				A10000000000000000000003 /* MobileCalendarService.swift in Sources */,
+				A10000000000000000000004 /* MobileMeetingRecorder.swift in Sources */,
+				A10000000000000000000005 /* MobileAppModel.swift in Sources */,
+				A10000000000000000000006 /* MobileRootView.swift in Sources */,
+				A10000000000000000000007 /* TodayView.swift in Sources */,
+				A10000000000000000000008 /* CodexMobileView.swift in Sources */,
+				A10000000000000000000009 /* NotesMobileView.swift in Sources */,
+				A1000000000000000000000A /* TodosMobileView.swift in Sources */,
+				A1000000000000000000000B /* MeetingRecorderView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A80000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A80000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		A80000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = iAgentMobile/Resources/iAgentMobile.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iAgentMobile/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.platon.iagent.mobile;
+				PRODUCT_NAME = iAgent;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		A80000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = iAgentMobile/Resources/iAgentMobile.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iAgentMobile/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.platon.iagent.mobile;
+				PRODUCT_NAME = iAgent;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A70000000000000000000001 /* Build configuration list for PBXProject "iAgentMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A80000000000000000000001 /* Debug */,
+				A80000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A70000000000000000000002 /* Build configuration list for PBXNativeTarget "iAgentMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A80000000000000000000003 /* Debug */,
+				A80000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A90000000000000000000001 /* XCLocalSwiftPackageReference ".." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ..;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A90000000000000000000002 /* iAgentCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A90000000000000000000001 /* XCLocalSwiftPackageReference ".." */;
+			productName = iAgentCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A60000000000000000000001 /* Project object */;
+}

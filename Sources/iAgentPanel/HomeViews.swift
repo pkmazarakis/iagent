@@ -542,7 +542,7 @@ struct CalendarDayView: View {
                     .foregroundStyle(.white.opacity(0.38))
 
                 Button {
-                    calendarService.refresh()
+                    calendarService.refresh(forceReload: true)
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -574,6 +574,7 @@ struct CalendarDayView: View {
                                 event: event,
                                 referenceNow: calendarService.referenceNow,
                                 action: calendarService.openCalendar,
+                                openLink: calendarService.openEventLink,
                                 startRecording: {
                                     controller.startMeetingCaptureFromCalendar(event)
                                 }
@@ -613,11 +614,12 @@ private struct CalendarEventRow: View {
     let event: CalendarEventItem
     let referenceNow: Date
     let action: () -> Void
+    let openLink: (URL) -> Void
     let startRecording: () -> Void
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 0) {
             Button(action: action) {
                 HStack(spacing: 10) {
                     Circle()
@@ -641,13 +643,6 @@ private struct CalendarEventRow: View {
                     }
 
                     Spacer(minLength: 12)
-
-                    Text(event.calendarTitle)
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(.white.opacity(0.32))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: 96, alignment: .trailing)
                 }
                 .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
@@ -655,26 +650,17 @@ private struct CalendarEventRow: View {
             .buttonStyle(.plain)
             .help("Open Calendar")
 
-            if isCurrent {
-                Button(action: startRecording) {
-                    Circle()
-                        .fill(Color.agentCoral)
-                        .frame(width: 8, height: 8)
-                        .overlay {
-                            Circle()
-                                .stroke(.white.opacity(0.28), lineWidth: 0.5)
-                        }
-                        .frame(width: 24, height: 40)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Start recording \(event.title)")
-                .accessibilityLabel("Start recording \(event.title)")
-            } else {
-                Color.clear
-                    .frame(width: 24, height: 40)
-                    .allowsHitTesting(false)
+            HStack(spacing: 12) {
+                recordingControl
+                linkControl
+
+                Text(event.calendarTitle)
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.32))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
+            .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.leading, 20)
         .padding(.trailing, 12)
@@ -686,6 +672,70 @@ private struct CalendarEventRow: View {
 
     private var isCurrent: Bool {
         event.isHappening(at: referenceNow)
+    }
+
+    @ViewBuilder
+    private var recordingControl: some View {
+        if isCurrent {
+            Button(action: startRecording) {
+                Circle()
+                    .fill(Color.agentCoral)
+                    .frame(width: 8, height: 8)
+                    .overlay {
+                        Circle()
+                            .stroke(.white.opacity(0.28), lineWidth: 0.5)
+                    }
+                    .frame(height: 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Start recording \(event.title)")
+            .accessibilityLabel("Start recording \(event.title)")
+        }
+    }
+
+    @ViewBuilder
+    private var linkControl: some View {
+        if event.linkURLs.count == 1, let url = event.linkURLs.first {
+            Button {
+                openLink(url)
+            } label: {
+                linkIcon
+            }
+            .buttonStyle(.plain)
+            .help("Open link for \(event.title)")
+            .accessibilityLabel("Open link for \(event.title)")
+        } else if event.linkURLs.count > 1 {
+            Menu {
+                ForEach(event.linkURLs, id: \.absoluteString) { url in
+                    Button(linkTitle(for: url)) {
+                        openLink(url)
+                    }
+                }
+            } label: {
+                linkIcon
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Open links for \(event.title)")
+            .accessibilityLabel("Open links for \(event.title)")
+        }
+    }
+
+    private var linkIcon: some View {
+        Image(systemName: "arrow.up.right")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(Color.agentBlue.opacity(hovering ? 0.9 : 0.62))
+            .frame(height: 40)
+            .contentShape(Rectangle())
+    }
+
+    private func linkTitle(for url: URL) -> String {
+        if let host = url.host?.replacingOccurrences(of: "www.", with: ""), !host.isEmpty {
+            return host
+        }
+        return url.absoluteString
     }
 }
 

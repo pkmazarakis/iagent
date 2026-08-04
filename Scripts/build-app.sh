@@ -19,6 +19,12 @@ cp "$ROOT/Sources/iAgentPanel/Info.plist" "$CONTENTS/Info.plist"
 for bundle in "$ROOT"/.build/debug/*.bundle; do
   ditto "$bundle" "$CONTENTS/Resources/${bundle:t}"
 done
-codesign --force --deep --sign - "$APP"
+codesign \
+  --force \
+  --deep \
+  --sign - \
+  --entitlements "$ROOT/Sources/iAgentPanel/iAgentPanel.entitlements" \
+  --requirements '=designated => identifier "com.platon.iagent-panel"' \
+  "$APP"
 
 print "$APP"

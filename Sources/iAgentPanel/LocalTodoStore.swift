@@ -9,6 +9,7 @@ struct LocalTodo: Codable, Identifiable, Sendable, Equatable {
     var listName: String?
     var completedAt: Date?
     let createdAt: Date
+    var updatedAt: Date
 
     init(
         id: UUID,
@@ -18,7 +19,8 @@ struct LocalTodo: Codable, Identifiable, Sendable, Equatable {
         dueDate: Date? = nil,
         listName: String? = nil,
         completedAt: Date? = nil,
-        createdAt: Date
+        createdAt: Date,
+        updatedAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -28,6 +30,7 @@ struct LocalTodo: Codable, Identifiable, Sendable, Equatable {
         self.listName = listName
         self.completedAt = completedAt
         self.createdAt = createdAt
+        self.updatedAt = updatedAt ?? createdAt
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -39,6 +42,7 @@ struct LocalTodo: Codable, Identifiable, Sendable, Equatable {
         case listName
         case completedAt
         case createdAt
+        case updatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -51,6 +55,7 @@ struct LocalTodo: Codable, Identifiable, Sendable, Equatable {
         listName = try container.decodeIfPresent(String.self, forKey: .listName)
         completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
     }
 
     func encode(to encoder: Encoder) throws {
@@ -63,6 +68,7 @@ struct LocalTodo: Codable, Identifiable, Sendable, Equatable {
         try container.encodeIfPresent(listName, forKey: .listName)
         try container.encodeIfPresent(completedAt, forKey: .completedAt)
         try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
     }
 
     func createdRelativeText(referenceDate: Date = Date()) -> String {
