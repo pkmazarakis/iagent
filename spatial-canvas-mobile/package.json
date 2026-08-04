@@ -1,0 +1,57 @@
+{
+  "name": "spatial",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A high-performance spatial canvas for notes, visuals, tasks and web clips.",
+  "author": "Spatial",
+  "type": "module",
+  "main": "electron/main.mjs",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "publish:pages": "bash scripts/publish-github-pages.sh",
+    "preview": "vite preview --host 127.0.0.1",
+    "electron": "electron .",
+    "electron:dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && SPATIAL_RENDERER_URL=http://127.0.0.1:5173 electron .\"",
+    "electron:dist": "vite build && electron-builder --mac",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@jvmr/pptx-to-html": "1.0.1",
+    "@phosphor-icons/react": "2.1.10",
+    "dexie": "4.4.4",
+    "docx-preview": "0.3.7",
+    "jszip": "3.10.1",
+    "motion": "12.41.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "xlsx": "0.18.5",
+    "zustand": "5.0.14"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "5.0.4",
+    "concurrently": "10.0.3",
+    "electron": "41.9.0",
+    "electron-builder": "26.15.3",
+    "fake-indexeddb": "6.2.5",
+    "vite": "6.4.2",
+    "vitest": "4.1.9",
+    "wait-on": "9.0.10"
+  },
+  "build": {
+    "appId": "com.spatial.canvas",
+    "productName": "Spatial",
+    "asar": true,
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png",
+      "identity": "-"
+    }
+  }
+}
