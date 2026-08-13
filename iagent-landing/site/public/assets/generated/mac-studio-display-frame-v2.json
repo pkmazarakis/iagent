@@ -1,0 +1,25 @@
+{
+  "source": "mac-studio-display-keyed-v2.png",
+  "output": "mac-studio-display-frame-v2.png",
+  "sourceSize": {
+    "width": 1536,
+    "height": 1024
+  },
+  "deviceBoundsInSource": {
+    "x": 163,
+    "y": 48,
+    "width": 1210,
+    "height": 930
+  },
+  "outputSize": {
+    "width": 1210,
+    "height": 930
+  },
+  "screenBoundsInOutput": {
+    "x": 17,
+    "y": 17,
+    "width": 1176,
+    "height": 658
+  },
+  "screenCoverage": 0.49081166585286456
+}

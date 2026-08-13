@@ -1,0 +1,29 @@
+:root {
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/assets/fonts/inter-var.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+.mobile-prototype {
+  width: min(100vw, 390px);
+  height: min(100dvh, 844px);
+  margin-inline: auto;
+  overflow: hidden;
+  position: relative;
+}
