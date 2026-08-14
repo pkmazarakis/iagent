@@ -1,128 +1,126 @@
-# Design QA — iAgent native-device demo redesign
+# Design QA — native iPhone media rollout
 
-Date: 2026-08-13
+Date: 2026-08-14
+
+Scope: private, owner-only phone-testing deployment using the exact iPhone captures supplied by the user.
 
 ## Outcome
 
-- No actionable P0, P1, or P2 visual, interaction, responsive, accessibility, image-loading, or video-loading findings remain.
-- Every product demonstration now appears inside a photorealistic front-facing Mac display or iPhone frame. Raw floating panels and CSS-only phone shells are removed from the rendered site.
-- The original page hierarchy, dark app-derived palette, typography, navigation, copy, section order, and conversion path remain intact.
-- The hero now presents one coherent 16-second Mac meeting flow plus a fully visible iPhone companion. The Mac video starts with the closed panel, clicks Record, shows live capture, finishes, processes the local transcript, opens Summary and Transcript, and returns to the closed panel.
-- Ask iAgent now uses a 1206×2622, 14.98-second mobile golden flow instead of the legacy 220×480 video.
+- No actionable P0, P1, or P2 visual, responsive, interaction, accessibility, image-loading, or video-loading findings remain for the private test site.
+- The six supplied recordings and nine supplied screenshots are represented across the hero, Meetings, Ask, Knowledge, Today, capture, and onboarding stories.
+- Every mobile product visual remains inside the reusable front-facing iPhone frame and the existing silver-light stage. No raw screen floats directly on the page.
+- The Mac demonstrations, dark app-derived theme, section order, typography, and conversion path remain intact.
 
-## Visual target and evidence
+## Source visual truth
 
-Primary references supplied by the user:
+Primary source captures:
 
-- Straight-on complete Mac display: `qa-captures/device-reference/mac-monitor-reference.png`
-- Full front-facing iPhone: `qa-captures/device-reference/iphone-reference.png`
-- Linear-style gray illumination behind black product UI: `qa-captures/device-reference/linear-light-reference.png`
+- Finished meeting summary: `/Users/platonmazarakis/Downloads/IMG_0514.PNG` — 1206×2622 px.
+- Full iPhone hardware direction: `/var/folders/zj/rwl9xbp92csc19g6d4yklw440000gn/T/codex-clipboard-3541c6c1-8bb5-4791-a618-5fc168f85ca5.png` — 1080×1350 px.
+- Remaining supplied mobile truth: `IMG_0483.PNG`, `IMG_0508.PNG` through `IMG_0515.PNG`, plus the six `ScreenRecording_08-14-2026 *.MP4` files in `/Users/platonmazarakis/Downloads/`.
 
-Final implementation captures:
+The source recording content is real user-authorized app data, not a sanitized public fixture. That distinction is intentional for this owner-only test and is a hard public-release gate noted below.
 
-- Desktop full page: `qa-captures/desktop-full.png`
-- Desktop hero: `qa-captures/desktop/sections/01-hero.png`
-- Desktop meetings: `qa-captures/desktop/sections/04-meeting-notes.png`
-- Desktop Ask: `qa-captures/desktop/sections/06-ai-chat.png`
-- Mobile full page: `qa-captures/mobile-full.png`
-- Mobile hero: `qa-captures/mobile/sections/01-hero.png`
-- Mobile meetings: `qa-captures/mobile/sections/04-meeting-notes.png`
-- Mobile Ask: `qa-captures/mobile/sections/06-ai-chat.png`
+## Browser-rendered evidence
 
-Combined reference/implementation comparisons opened and reviewed:
+Implementation captures:
 
-- `qa-captures/device-comparisons/desktop-hero.jpg`
-- `qa-captures/device-comparisons/desktop-linear.jpg`
-- `qa-captures/device-comparisons/mobile-hero.jpg`
+- Mobile viewport: `qa-captures/native-mobile-v1/mobile-meeting-summary-390x844.jpg` — 390×844 px at a 390×844 CSS viewport and 1:1 screenshot density.
+- Focused rendered phone screen: `qa-captures/native-mobile-v1/implementation-meeting-summary-screen.jpg` — 175×382 px.
+- Desktop device-stage view: `qa-captures/native-mobile-v1/desktop-meeting-summary-1440x900.jpg` — browser capture from a 1440×900 CSS viewport.
+- Browser assertion record: `qa-captures/native-mobile-v1/browser-qa.json`.
 
-The comparisons confirm the requested complete front-facing hardware, large legible screens, visible Mac stand, fully visible iPhone silhouette, and restrained silver illumination. Product UI remains the dominant subject; hardware is support, not decoration.
+Combined comparisons opened and reviewed:
 
-## Media quality
+- Full-view art direction: `qa-captures/native-mobile-v1/reference-vs-rendered-device-stage.png`.
+- Focused product pixels: `qa-captures/native-mobile-v1/reference-vs-rendered-meeting-summary.png`.
 
-| Asset | Resolution | Duration | Verification |
-| --- | ---: | ---: | --- |
-| `macos-meeting-golden-flow.mp4` | 1920×1200 | 16.0 s | H.264, 30 fps, muted, fast-start, 6.5 MB, media `readyState: 4` |
-| `iphone-ask-golden-flow.mp4` | 1206×2622 | 15.0 s | H.264, muted, fast-start, 4.0 MB, media `readyState: 4` |
-| `mac-studio-display-frame-v2.png` | 1210×930 | — | RGBA with transparent screen/background |
-| `iphone-titanium-frame-v2.png` | 565×1175 | — | RGBA with transparent screen/background |
-| `device-stage-silver-light-v1.jpg` | 1536×1024 | — | Original generated background, decoded successfully |
+Normalization for the focused comparison:
 
-The 16:10 Mac recording is top-anchored and cover-cropped only at the bottom to fit the display's approximately 16:9 opening; the panel, cursor, and top-edge actions remain intact. All published fixture content is sanitized. No local Codex/task/project titles appear.
+- Source: 1206×2622 original, first web-optimized to 604×1312, then normalized to 175×382 for comparison.
+- Implementation: the visible `.iphone-device-screen` measured 174.86×382.34 CSS px and was captured/cropped to 175×382 px.
+- State: dark theme, Meetings → Finished summary, same timestamp and same product content.
 
-## Responsive and interaction checks
+The focused comparison confirms that the app typography, spacing, colors, icons, and content remain the supplied native pixels. The only expected visible difference is the iPhone aperture mask at the outer corners. The full-view comparison is an art-direction check rather than a pixel clone: it confirms the requested complete hardware silhouette, front-facing product readability, and neutral gray illumination.
 
-- Desktop rail remains 976 px; mobile rail remains 342 px with 24 px gutters.
-- Horizontal overflow is zero at 1440, 1024, 768, 390, 360, and 320 px.
-- No main section crosses the viewport at 1024, 768, 360, or 320 px.
-- Every rendered Mac/iPhone frame remains inside its clipped demo stage at 1024, 768, 360, and 320 px; no frame intersects the hero note or showcase captions.
-- Hero phone is fully contained at desktop and mobile and does not obscure the Mac screen.
-- Mobile showcase tab strips are now reachable with horizontal scrolling; Ask and local-knowledge states are no longer locked to the first tab.
-- Desktop tab keyboard behavior still supports Arrow keys and End.
-- Mac demos expose an accessible pause/play control; reduced-motion mode swaps all videos for closed/static posters.
-- The hero companion phone is a crisp static Notes state so it does not compete with the Mac golden flow or trigger a second above-the-fold sequence download.
-- Features uses disclosure navigation semantics, opens, closes on Escape, closes on outside click, and exposes five ordinary links.
-- Product tabs use one stable rendered tabpanel, and every `aria-controls` reference resolves.
-- FAQ accordion semantics, anchors, and primary CTA scrolling continue to work.
-- Browser console errors: 0. Page errors: 0. Image decode failures: 0. Video media errors: 0.
+## Required fidelity surfaces
 
-## Reference comparison fixes
+- Fonts and typography: native UI text is preserved as source pixels, with no redraw or font substitution. Landing display/body type keeps the established system stack, weights, wrapping, and dark-theme hierarchy.
+- Spacing and layout rhythm: all seven rendered iPhones stay inside their stage/panel bounds at 1440, 768, 390, and 320 px. Device-to-caption overlap is zero; horizontal page overflow is zero.
+- Colors and tokens: the native black/sheet hierarchy, coral/green/blue/violet/amber states, titanium edge, and silver-light stage remain balanced against the landing page's black canvas.
+- Image quality and asset fidelity: screenshots are served at 604×1312 and remain above their rendered density. The phone frame is a transparent 565×1175 raster overlay; no CSS phone shell, fake SVG, or image-model redraw replaces the product.
+- Copy and content: landing copy now accurately describes each visible mobile flow. The native captures remain verbatim because this is the user's requested private test data.
+
+## Comparison history
 
 ### Pass 1
 
-- [P1] Separate closed/open Mac panels read as overlapping screenshots rather than a real native flow.
-- [P1] Hero iPhone was 43–45% clipped and covered Mac product pixels.
-- [P1] The Ask video was only 220×480 and enlarged beyond its source dimensions.
-- [P2] Raw panel corners were clipped in Today and Ask demonstrations.
-- [P2] Dark product surfaces disappeared into near-black showcase backgrounds.
-- [P2] Mobile showcase tabs were hidden, making later product states unreachable.
+- [P1] Play/pause controls sat inside `.iphone-device-screen` and covered real native controls.
+- [P2] The 28–30 px playback targets were too small for a comfortable mobile tap.
+- [P2] End-state posters flashed backward into videos that begin on Today.
+- [P2] The mobile hero phone had only one pixel of bottom clearance.
+- [P2] Six unreferenced legacy mobile assets added roughly 5.5 MB to the deployable tree.
 
 Fixes:
 
-- Replaced the fragmented Mac states with one sanitized high-resolution golden-flow video inside a generated display frame.
-- Added a high-resolution native iPhone Ask loop inside a generated titanium frame.
-- Wrapped every secondary Mac and iPhone demo in the same reusable hardware system.
-- Replaced colored/raw showcase fills with an original Linear-inspired silver-light stage asset.
-- Removed all oversizing/cut-corner media rules and made every device fully visible.
-- Restored mobile tab access with a horizontally scrollable tablist.
-- Removed public files containing personal/local fixture names and kept those originals outside the deployable `public/` tree.
+- Moved iPhone playback controls into an external stage lane with zero product-pixel overlap.
+- Increased every iPhone playback target to 44×44 px and simplified it to an action label without contradictory `aria-pressed` state.
+- Extracted real first-frame posters for all six recordings while retaining useful end-state posters for reduced motion.
+- Raised the hero phone 14 px.
+- Removed the superseded synthetic/legacy mobile images and video.
 
 ### Pass 2
 
-- [P2] The Mac summary poster skipped the requested closed-panel opening state.
-
-Fix:
-
-- Regenerated the Mac poster at the loop's closed-panel timestamp. Reduced-motion and pre-video states now tell the same story as the animation.
-
-### Pass 3
-
-- [P1] Mobile hardware intersected the hero note and sat over showcase captions.
-- [P1] The iPhone video and rotating image sequences lacked durable pause controls.
-- [P1] Legacy public assets exposed personal/local fixture labels even though they were not needed by the final page.
-- [P2] High video bitrates made the two golden flows heavier than needed for their rendered sizes.
-- [P1] Fixed-width Mac frames clipped at 768 px and 320 px edge cases.
-- [P2] Product tabs and Features used incomplete ARIA patterns.
+- [P2] The Ask control exceeded the silver stage by 8 px at desktop/tablet and by 12 px at 320 px.
+- [P2] The Mac meeting video and iPhone meeting video could briefly play together at the section handoff.
 
 Fixes:
 
-- Repositioned and slightly reduced the mobile hero phone, reserved a dedicated caption lane, and raised showcase captions onto legible dark glass.
-- Added independent user-pause state to image sequences and accessible pause/play controls to the iPhone and Mac motion demos.
-- Quarantined every identified personal/local capture outside `public/`, updated the favicon, and rebuilt the deployable output.
-- Re-encoded Mac and iPhone flows at visually lossless-for-slot bitrates, cutting their combined weight from roughly 17.6 MB to 10.5 MB.
-- Added tablet and narrow-phone device sizing without changing the established 360/390/desktop composition.
-- Replaced the Features menu role with disclosure navigation semantics and stabilized tabpanel IDs.
+- Centered the phone-plus-control group with explicit desktop/tablet/narrow offsets; final control clipping and screen overlap are both zero at every tested width.
+- Added exclusive demo playback. A new demo claims playback, pauses the previous visible demo, and leaves the previous control correctly labeled Play.
+
+### Final pass
+
+- No remaining P0, P1, or P2 findings.
+- Seven iPhones × four viewports: frame clipping 0.
+- Four showcase captions × four viewports: device overlap 0.
+- Four active mobile video surfaces × four viewports: 44×44 targets, control clipping 0, product-screen overlap 0, and one visible video playing.
+
+## Interaction and accessibility verification
+
+- All 12 mobile showcase tabs were clicked in the in-app browser; every tab became selected, every `aria-controls` target existed, and every active image/video decoded successfully.
+- Meeting, Ask, Knowledge, and Today videos expose external Play/Pause actions. User pause persists after scrolling away and returning.
+- When two demonstrations share a viewport edge, only one plays; the automatically paused control reports Play.
+- Initial page DOM contains zero iPhone MP4 elements. Mobile recordings mount only when their phone approaches the viewport.
+- Reduced-motion logic swaps videos for static `reducedPoster` images and disables rotating image sequences.
+- Features opens and closes with Escape. The first FAQ opens with a resolving controlled panel.
+- Duplicate IDs: 0. Broken tab references: 0. Broken images: 0.
+- Recent browser console errors/warnings at `http://localhost:4173/`: 0.
+
+## Media pipeline
+
+All six source HEVC recordings were converted to web-safe 604×1312 H.264/AVC, 30 fps, fast-start MP4 with audio removed:
+
+| Flow | Duration | Deployed size |
+| --- | ---: | ---: |
+| Today | 10.5 s | 1.09 MB |
+| Codex | 10.1 s | 1.19 MB |
+| Notes | 12.6 s | 0.90 MB |
+| Todos | 10.6 s | 0.78 MB |
+| Ask | 41.3 s | 2.80 MB |
+| Meeting | 31.9 s | 2.31 MB |
+
+The optimized mobile screenshots plus first-frame posters total approximately 2.1 MB. The original 67.8 MB source set remains outside `public/`.
 
 ## Runtime verification
 
 - `npm run build`: passed.
 - `npm run test:sites`: passed, 4/4.
-- `node ../research/scripts/interaction-qa.mjs`: passed, 47/47 assertions, including deferred below-fold media loading, ARIA reference integrity, tablet/narrow-phone hardware containment, and copy-obstruction checks.
-- `git diff --check -- iagent-landing`: passed.
-- Local preview remains available at `http://127.0.0.1:4173/`.
+- `git diff --check`: passed.
+- Local preview: `http://localhost:4173/`.
 
-## Production note
+## Private-test gate
 
-- The generated device frames are polished front-on 2.5D product renders. This keeps the real UI pixel-perfect and readable, unlike a perspective-heavy scene or an image-model redraw of the app.
-- Screen Studio is installed but has no supported CLI, URL scheme, or headless renderer. Its bundled hardware images were not copied. A future manual Screen Studio export can add editorial zooms, but the deterministic in-site compositing is the production source of truth.
+The supplied captures contain real names, project titles, and task/campaign text. The user explicitly supplied and requested these assets for the current owner-only test deployment. Do not change the Site to public or shared access until those pixels are sanitized or the user explicitly approves that exact public disclosure.
 
 final result: passed

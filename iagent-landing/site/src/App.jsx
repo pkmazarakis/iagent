@@ -30,42 +30,62 @@ const media = {
     todoList: `${ASSET}/desktop/todo-list.png`,
   },
   mobile: {
-    askCitation: `${ASSET}/mobile/ask-citation.png`,
-    askGrounded: `${ASSET}/mobile/ask-grounded.png`,
-    notes: `${ASSET}/mobile/notes.png`,
-    todos: `${ASSET}/mobile/todos.png`,
+    welcome: `${ASSET}/mobile/native-v1/welcome.png`,
+    today: `${ASSET}/mobile/native-v1/today.png`,
+    codex: `${ASSET}/mobile/native-v1/codex.png`,
+    notes: `${ASSET}/mobile/native-v1/notes.png`,
+    todos: `${ASSET}/mobile/native-v1/todos.png`,
+    createMenu: `${ASSET}/mobile/native-v1/create-menu.png`,
+    meetingLive: `${ASSET}/mobile/native-v1/meeting-live.png`,
+    meetingSummary: `${ASSET}/mobile/native-v1/meeting-summary.png`,
+    todoCompose: `${ASSET}/mobile/native-v1/todo-compose.png`,
+    askSources: `${ASSET}/mobile/native-v1/ask-sources.png`,
+    askReview: `${ASSET}/mobile/native-v1/ask-review.png`,
+    askCreated: `${ASSET}/mobile/native-v1/ask-created.png`,
+    todayStart: `${ASSET}/mobile/native-v1/today-start.jpg`,
+    codexStart: `${ASSET}/mobile/native-v1/codex-start.jpg`,
+    notesStart: `${ASSET}/mobile/native-v1/notes-start.jpg`,
+    todosStart: `${ASSET}/mobile/native-v1/todos-start.jpg`,
+    askStart: `${ASSET}/mobile/native-v1/ask-start.jpg`,
+    meetingStart: `${ASSET}/mobile/native-v1/meeting-start.jpg`,
   },
   video: {
     meetingGoldenFlow: `${ASSET}/video/macos-meeting-golden-flow.mp4`,
     meetingGoldenPoster: `${ASSET}/video/macos-meeting-golden-flow-poster.jpg`,
     meetingGoldenStart: `${ASSET}/video/macos-meeting-golden-flow-start.jpg`,
-    askGoldenFlow: `${ASSET}/video/iphone-ask-golden-flow.mp4`,
-    askGoldenStart: `${ASSET}/video/iphone-ask-golden-flow-start.jpg`,
+    iphoneToday: `${ASSET}/video/iphone-native-v1-today.mp4`,
+    iphoneCodex: `${ASSET}/video/iphone-native-v1-codex.mp4`,
+    iphoneNotes: `${ASSET}/video/iphone-native-v1-notes.mp4`,
+    iphoneTodos: `${ASSET}/video/iphone-native-v1-todos.mp4`,
+    iphoneAsk: `${ASSET}/video/iphone-native-v1-ask.mp4`,
+    iphoneMeeting: `${ASSET}/video/iphone-native-v1-meeting.mp4`,
   },
 };
 
 const askTabs = [
   {
-    label: "Find the context",
-    caption: "iAgent checks the local sources relevant to the question.",
-    frames: [media.video.askGoldenStart],
-    poster: media.video.askGoldenStart,
-    video: media.video.askGoldenFlow,
-    alt: "Ask iAgent finding local Calendar, todo, Codex, note, and meeting sources",
+    label: "Speak naturally",
+    caption: "A spoken request moves through live transcription into Ask iAgent.",
+    frames: [media.mobile.askCreated],
+    poster: media.mobile.askStart,
+    reducedPoster: media.mobile.askCreated,
+    video: media.video.iphoneAsk,
+    alt: "A spoken request becomes a grounded Ask iAgent response and proposed todo on iPhone",
     kind: "phone",
   },
   {
-    label: "Build the answer",
-    caption: "The answer stays grounded in the records already on your devices.",
-    frames: [media.mobile.askGrounded],
-    alt: "A grounded Ask iAgent answer with five inspectable sources",
+    label: "Review context",
+    caption: "The work trace shows the local meeting records selected for the answer.",
+    frames: [media.mobile.askSources],
+    alt: "Ask iAgent reviewing selected local meeting records on iPhone",
     kind: "phone",
   },
   {
-    label: "Review the source",
-    caption: "Open a citation without losing the question or the rest of the answer.",
-    frames: [media.mobile.askCitation],
-    alt: "An Ask iAgent citation preview showing a read-only source record",
+    label: "Approve the action",
+    caption: "Nothing changes until you confirm; the approved todo is then saved locally.",
+    frames: [media.mobile.askReview, media.mobile.askCreated],
+    poster: media.mobile.askCreated,
+    alt: "Ask iAgent moving from an explicit todo review to a locally created todo",
     kind: "phone",
   },
 ];
@@ -80,17 +100,81 @@ const knowledgeTabs = [
     panelVariant: "note",
   },
   {
-    label: "Private sync",
-    caption: "The iPhone keeps an offline store and reconciles through private CloudKit records.",
+    label: "Local notes",
+    caption: "Create a note on iPhone and return to the local library in one flow.",
     frames: [media.mobile.notes],
-    alt: "The local iAgent Notes library on iPhone",
+    poster: media.mobile.notesStart,
+    reducedPoster: media.mobile.notes,
+    video: media.video.iphoneNotes,
+    alt: "iAgent creates a note and returns to the local Notes library on iPhone",
     kind: "phone",
   },
   {
-    label: "Ask in context",
-    caption: "Pull the exact note, event, task, or transcript into a grounded answer.",
-    frames: [media.mobile.askGrounded],
-    alt: "Ask iAgent using notes and other local sources as context",
+    label: "Meeting records",
+    caption: "A live transcript settles into a finished summary in the same library.",
+    frames: [media.mobile.meetingLive, media.mobile.meetingSummary],
+    poster: media.mobile.meetingSummary,
+    alt: "An iPhone meeting transcript becoming a finished iAgent summary",
+    kind: "phone",
+  },
+];
+
+const meetingMobileTabs = [
+  {
+    label: "Golden flow",
+    caption: "Start, record, stop, transcribe, and review the finished summary on iPhone.",
+    frames: [media.mobile.meetingSummary],
+    poster: media.mobile.meetingStart,
+    reducedPoster: media.mobile.meetingSummary,
+    video: media.video.iphoneMeeting,
+    alt: "iAgent records a meeting on iPhone, shows the live transcript, then generates the finished summary",
+    kind: "phone",
+  },
+  {
+    label: "Live transcript",
+    caption: "The timer, live words, waveform, and stop control remain visible while recording.",
+    frames: [media.mobile.meetingLive],
+    alt: "A live iAgent meeting transcript and waveform on iPhone",
+    kind: "phone",
+  },
+  {
+    label: "Finished summary",
+    caption: "The transcript becomes a local meeting record with a readable summary.",
+    frames: [media.mobile.meetingSummary],
+    alt: "A finished iAgent meeting summary on iPhone",
+    kind: "phone",
+  },
+];
+
+const todayMobileTabs = [
+  {
+    label: "See the day",
+    caption: "Move from the daily briefing into the exact event, task, or next action.",
+    frames: [media.mobile.today],
+    poster: media.mobile.todayStart,
+    reducedPoster: media.mobile.today,
+    video: media.video.iphoneToday,
+    alt: "iAgent Today moving between the schedule, a live Codex task, and open todos on iPhone",
+    kind: "phone",
+  },
+  {
+    label: "Follow Codex",
+    caption: "Open a live task and inspect its recent agent activity without returning to the Mac.",
+    frames: [media.mobile.codex],
+    poster: media.mobile.codexStart,
+    reducedPoster: media.mobile.codex,
+    video: media.video.iphoneCodex,
+    alt: "iAgent opens a live Codex task and its recent agent activity on iPhone",
+    kind: "phone",
+  },
+  {
+    label: "Capture a todo",
+    caption: "Dictate a task, review the text, and save it into the local todo list.",
+    frames: [media.mobile.todos],
+    poster: media.mobile.todosStart,
+    reducedPoster: media.mobile.todos,
+    video: media.video.iphoneTodos,
+    alt: "iAgent dictates a task and saves it locally on iPhone",
     kind: "phone",
   },
 ];
@@ -193,9 +277,9 @@ function SequenceImage({
 }) {
   const reduceMotion = usePrefersReducedMotion();
   const frameKey = frames.join("|");
-  const posterIndex = poster ? Math.max(0, frames.indexOf(poster)) : frames.length - 1;
+  const posterIndex = poster ? Math.max(0, frames.indexOf(poster)) : 0;
   const [index, setIndex] = useState(posterIndex);
-  const [isInViewport, setIsInViewport] = useState(true);
+  const [isInViewport, setIsInViewport] = useState(eager);
   const [userPaused, setUserPaused] = useState(false);
   const containerRef = useRef(null);
 
@@ -218,6 +302,15 @@ function SequenceImage({
     return () => window.clearInterval(timer);
   }, [frameKey, frames.length, interval, isInViewport, posterIndex, preloadFrames, reduceMotion, userPaused]);
 
+  useEffect(() => {
+    if (!preloadFrames || !isInViewport || userPaused || frames.length < 2) return undefined;
+    const nextFrame = new Image();
+    nextFrame.src = frames[(index + 1) % frames.length];
+    return () => {
+      nextFrame.src = "";
+    };
+  }, [frames, index, isInViewport, preloadFrames, userPaused]);
+
   return (
     <div ref={containerRef} className={`sequence-image ${className}`.trim()}>
       <img
@@ -232,7 +325,6 @@ function SequenceImage({
           className="sequence-playback"
           type="button"
           aria-label={userPaused ? "Play image demo" : "Pause image demo"}
-          aria-pressed={userPaused}
           onClick={() => setUserPaused((current) => !current)}
         >
           {userPaused ? <Play aria-hidden="true" size={12} fill="currentColor" /> : <Pause aria-hidden="true" size={12} fill="currentColor" />}
@@ -242,12 +334,14 @@ function SequenceImage({
   );
 }
 
-function NativeVideo({ src, poster, alt, className = "" }) {
+function NativeVideo({ src, poster, reducedPoster = poster, alt, className = "" }) {
   const reduceMotion = usePrefersReducedMotion();
   const containerRef = useRef(null);
   const videoRef = useRef(null);
+  const playbackToken = useRef(Symbol(src));
   const [isInViewport, setIsInViewport] = useState(false);
-  const [paused, setPaused] = useState(false);
+  const [userPaused, setUserPaused] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
 
   useEffect(() => {
     if (!containerRef.current || !("IntersectionObserver" in window)) {
@@ -256,28 +350,57 @@ function NativeVideo({ src, poster, alt, className = "" }) {
     }
     const observer = new IntersectionObserver(
       ([entry]) => setIsInViewport(entry.isIntersecting),
-      { rootMargin: "240px" },
+      { rootMargin: "0px", threshold: 0.3 },
     );
     observer.observe(containerRef.current);
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || reduceMotion || !isInViewport) {
+      setIsPlaying(false);
+      return undefined;
+    }
+
+    const handlePlaybackClaim = (event) => {
+      if (event.detail === playbackToken.current) return;
+      video.pause();
+      setIsPlaying(false);
+    };
+
+    window.addEventListener("iagent:demo-play", handlePlaybackClaim);
+    if (userPaused) {
+      video.pause();
+      setIsPlaying(false);
+    } else {
+      window.dispatchEvent(new CustomEvent("iagent:demo-play", { detail: playbackToken.current }));
+      video.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+    }
+
+    return () => {
+      window.removeEventListener("iagent:demo-play", handlePlaybackClaim);
+    };
+  }, [isInViewport, reduceMotion, src, userPaused]);
+
   const togglePlayback = () => {
     const video = videoRef.current;
     if (!video || reduceMotion) return;
     if (video.paused) {
-      video.play();
-      setPaused(false);
+      setUserPaused(false);
+      window.dispatchEvent(new CustomEvent("iagent:demo-play", { detail: playbackToken.current }));
+      video.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
     } else {
       video.pause();
-      setPaused(true);
+      setUserPaused(true);
+      setIsPlaying(false);
     }
   };
 
   if (reduceMotion || !isInViewport) {
     return (
       <div ref={containerRef} className={`sequence-image ${className}`.trim()}>
-        <img src={poster} alt={alt} loading="lazy" />
+        <img src={reduceMotion ? reducedPoster : poster} alt={alt} loading="lazy" />
       </div>
     );
   }
@@ -289,7 +412,6 @@ function NativeVideo({ src, poster, alt, className = "" }) {
         src={src}
         poster={poster}
         aria-label={alt}
-        autoPlay={!paused}
         muted
         loop
         playsInline
@@ -298,11 +420,10 @@ function NativeVideo({ src, poster, alt, className = "" }) {
       <button
         className="sequence-playback"
         type="button"
-        aria-label={paused ? "Play iPhone demo" : "Pause iPhone demo"}
-        aria-pressed={paused}
+        aria-label={isPlaying ? "Pause iPhone demo" : "Play iPhone demo"}
         onClick={togglePlayback}
       >
-        {paused ? <Play aria-hidden="true" size={12} fill="currentColor" /> : <Pause aria-hidden="true" size={12} fill="currentColor" />}
+        {isPlaying ? <Pause aria-hidden="true" size={12} fill="currentColor" /> : <Play aria-hidden="true" size={12} fill="currentColor" />}
       </button>
     </div>
   );
@@ -356,8 +477,10 @@ function MeetingGoldenFlow({ className = "", compact = false, eager = false }) {
   const reduceMotion = usePrefersReducedMotion();
   const containerRef = useRef(null);
   const videoRef = useRef(null);
+  const playbackToken = useRef(Symbol("mac-demo"));
   const [isInViewport, setIsInViewport] = useState(eager);
-  const [paused, setPaused] = useState(false);
+  const [userPaused, setUserPaused] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
 
   useEffect(() => {
     if (!containerRef.current || !("IntersectionObserver" in window)) {
@@ -366,21 +489,50 @@ function MeetingGoldenFlow({ className = "", compact = false, eager = false }) {
     }
     const observer = new IntersectionObserver(
       ([entry]) => setIsInViewport(entry.isIntersecting),
-      { rootMargin: "240px" },
+      { rootMargin: "0px", threshold: 0.45 },
     );
     observer.observe(containerRef.current);
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || reduceMotion || !isInViewport) {
+      setIsPlaying(false);
+      return undefined;
+    }
+
+    const handlePlaybackClaim = (event) => {
+      if (event.detail === playbackToken.current) return;
+      video.pause();
+      setIsPlaying(false);
+    };
+
+    window.addEventListener("iagent:demo-play", handlePlaybackClaim);
+    if (userPaused) {
+      video.pause();
+      setIsPlaying(false);
+    } else {
+      window.dispatchEvent(new CustomEvent("iagent:demo-play", { detail: playbackToken.current }));
+      video.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+    }
+
+    return () => {
+      window.removeEventListener("iagent:demo-play", handlePlaybackClaim);
+    };
+  }, [isInViewport, reduceMotion, userPaused]);
+
   const togglePlayback = () => {
     const video = videoRef.current;
     if (!video || reduceMotion) return;
     if (video.paused) {
-      video.play();
-      setPaused(false);
+      setUserPaused(false);
+      window.dispatchEvent(new CustomEvent("iagent:demo-play", { detail: playbackToken.current }));
+      video.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
     } else {
       video.pause();
-      setPaused(true);
+      setUserPaused(true);
+      setIsPlaying(false);
     }
   };
 
@@ -402,7 +554,6 @@ function MeetingGoldenFlow({ className = "", compact = false, eager = false }) {
             src={media.video.meetingGoldenFlow}
             poster={media.video.meetingGoldenStart}
             aria-label="Closed iAgent panel opens, records a meeting, creates a transcript and summary, then closes"
-            autoPlay={!paused}
             muted
             loop
             playsInline
@@ -414,12 +565,11 @@ function MeetingGoldenFlow({ className = "", compact = false, eager = false }) {
         <button
           className="demo-playback"
           type="button"
-          aria-label={paused ? "Play Mac demo" : "Pause Mac demo"}
-          aria-pressed={paused}
+          aria-label={isPlaying ? "Pause Mac demo" : "Play Mac demo"}
           onClick={togglePlayback}
         >
-          {paused ? <Play aria-hidden="true" size={14} fill="currentColor" /> : <Pause aria-hidden="true" size={14} fill="currentColor" />}
-          <span>{paused ? "Play demo" : "Pause demo"}</span>
+          {isPlaying ? <Pause aria-hidden="true" size={14} fill="currentColor" /> : <Play aria-hidden="true" size={14} fill="currentColor" />}
+          <span>{isPlaying ? "Pause demo" : "Play demo"}</span>
         </button>
       ) : null}
     </div>
@@ -431,13 +581,19 @@ function DeviceMedia({ item }) {
     return (
       <IPhoneDevice className="showcase-phone-device" label={item.alt}>
         {item.video ? (
-          <NativeVideo src={item.video} poster={item.poster} alt={item.alt} className="device-screen-media" />
+          <NativeVideo
+            src={item.video}
+            poster={item.poster}
+            reducedPoster={item.reducedPoster}
+            alt={item.alt}
+            className="device-screen-media"
+          />
         ) : (
           <SequenceImage
             frames={item.frames}
             poster={item.poster}
             alt={item.alt}
-            interval={2500}
+            interval={item.interval ?? 2500}
             className="device-screen-media"
           />
         )}
@@ -678,14 +834,15 @@ function Hero() {
           label="The same iAgent day moving through Today, Codex, Notes, and Todos on iPhone"
         >
           <SequenceImage
-            frames={[media.mobile.notes]}
-            poster={media.mobile.notes}
-            alt="The iAgent Notes library on iPhone"
-            interval={2800}
+            frames={[media.mobile.today, media.mobile.codex, media.mobile.notes, media.mobile.todos]}
+            poster={media.mobile.today}
+            alt="The iAgent mobile app moving through Today, Codex, Notes, and Todos on iPhone"
+            interval={3000}
+            className="device-screen-media"
             eager
           />
         </IPhoneDevice>
-        <p className="hero-demo-note">One meeting, from the top edge of your Mac to a finished private note.</p>
+        <p className="hero-demo-note">One private day, moving naturally between your Mac and iPhone.</p>
       </DeviceStage>
     </section>
   );
@@ -793,6 +950,21 @@ function MeetingSection() {
           <li>Meeting note</li>
         </ol>
       </DeviceStage>
+
+      <div className="mobile-flow-intro">
+        <p className="eyebrow eyebrow-green">The iPhone flow</p>
+        <h3>The same meeting record fits in your hand</h3>
+        <p>
+          Start a recording on iPhone, follow the live transcript, and keep the finished summary
+          beside the rest of your private notes.
+        </p>
+      </div>
+      <ProductShowcase
+        tabs={meetingMobileTabs}
+        label="iPhone meeting capture stages"
+        tone="dark"
+        className="phone-showcase meeting-mobile-showcase"
+      />
 
       <Marquee
         subtle
@@ -919,38 +1091,41 @@ function AskSection() {
     <section className="feature-section section-rail" id="ask" aria-labelledby="ask-title">
       <SectionHeader eyebrow="Ask iAgent" title="Ask your day, not another empty chatbot" id="ask-title" />
       <blockquote className="speech-card">
-        “What should I focus on today?” starts with your actual meetings, open todos, active Codex
-        work, notes, and transcripts—not a blank prompt.
+        Speak a real request. iAgent transcribes it, checks the local context that matters, and
+        pauses for review before it changes anything.
       </blockquote>
       <div className="ask-artifact">
         <DeviceStage className="ask-device-stage">
-          <IPhoneDevice label="A grounded Ask iAgent answer on iPhone">
-            <SequenceImage
-              frames={[media.mobile.askGrounded]}
-              alt="A grounded Ask iAgent answer"
+          <IPhoneDevice label="A spoken Ask iAgent request becoming a reviewed local action on iPhone">
+            <NativeVideo
+              src={media.video.iphoneAsk}
+              poster={media.mobile.askStart}
+              reducedPoster={media.mobile.askCreated}
+              alt="A spoken request becomes a grounded Ask iAgent response and reviewed local todo"
+              className="device-screen-media"
             />
           </IPhoneDevice>
         </DeviceStage>
         <div>
-          <p className="artifact-kicker">Five local source types, one answer</p>
-          <h3>The trail stays visible</h3>
+          <p className="artifact-kicker">Voice → context → review</p>
+          <h3>Ask can stop before it acts</h3>
           <p>
-            Calendar, todos, Codex work, notes, and meeting records remain attached to the response
-            so you can inspect the reasoning path.
+            The work trace stays visible while iAgent checks local records. A proposed todo remains
+            a proposal until you approve it, then saves locally.
           </p>
         </div>
       </div>
       <div className="subsection-copy bordered-copy">
-        <h3>Answers you can inspect</h3>
+        <h3>Grounded work you can inspect</h3>
         <p>
-          iAgent shows which local sources it searched, lets you open the exact citation, and keeps
-          follow-up questions in the same grounded thread.
+          iAgent shows the local records it checks, keeps the response in the same thread, and
+          separates read-only research from an action that needs your confirmation.
         </p>
-        <p className="highlight-line"><span>One useful question:</span> “What should I focus on today?”</p>
+        <p className="highlight-line"><span>One useful request:</span> “Turn these meeting decisions into the todos I need.”</p>
       </div>
       <div className="proof-grid proof-grid-two ask-proof-grid">
         <ProofCard title="Read-only retrieval">Questions begin by finding context, not changing it.</ProofCard>
-        <ProofCard title="Citations stay attached">Open the exact record behind any grounded answer.</ProofCard>
+        <ProofCard title="Explicit approval">A proposed action waits for your confirmation before it is saved.</ProofCard>
       </div>
       <ProductShowcase tabs={askTabs} label="Ask iAgent stages" tone="dark" className="phone-showcase" />
     </section>
@@ -1026,8 +1201,8 @@ function KnowledgeSection() {
           There is no proprietary document format standing between you and your work.
         </p>
         <p>
-          The iPhone keeps an offline local store. Private CloudKit sync reconciles changes when a
-          connection returns.
+          On iPhone, a new note, live meeting transcript, and finished summary remain part of the
+          same readable local library. Private CloudKit sync can reconcile changes when a connection returns.
         </p>
       </div>
       <blockquote className="quote-rail quote-purple">
@@ -1065,6 +1240,12 @@ function TodaySection() {
         iAgent combines the next Calendar event, active Codex tasks, and every open todo into one
         briefing. As the day changes, the panel keeps the most relevant next step within reach.
       </p>
+      <ProductShowcase
+        tabs={todayMobileTabs}
+        label="The iAgent mobile companion"
+        tone="warm"
+        className="phone-showcase today-mobile-showcase"
+      />
       <div className="mini-features">
         <article>
           <h3>One daily briefing</h3>
@@ -1082,17 +1263,19 @@ function TodaySection() {
         <article>
           <h3>Capture from anywhere</h3>
           <p>
-            Use Option-N for a note, Option-V for voice, or the plus menu for a todo, focus session,
-            agent task, or meeting recording.
+            Use Mac shortcuts or the iPhone plus menu for a voice chat, note, todo, agent task, or
+            meeting recording.
           </p>
-          <div className="mini-media desktop-mini-media">
-            <MacDevice label="Open todos inside iAgent on Mac">
-              <MacDesktopState
-                frames={[media.desktop.todoList]}
-                alt="Open todos in the iAgent Mac panel"
-                variant="todo"
+          <div className="mini-media phone-mini-media">
+            <IPhoneDevice label="The iAgent Create menu and todo composer on iPhone">
+              <SequenceImage
+                frames={[media.mobile.createMenu, media.mobile.todoCompose]}
+                poster={media.mobile.createMenu}
+                alt="The iAgent Create menu opening a full todo composer on iPhone"
+                className="device-screen-media"
+                interval={3000}
               />
-            </MacDevice>
+            </IPhoneDevice>
           </div>
         </article>
       </div>
@@ -1126,6 +1309,25 @@ function HowItWorks() {
             <p>{description}</p>
           </article>
         ))}
+      </div>
+      <div className="how-onboarding">
+        <DeviceStage className="how-onboarding-stage">
+          <IPhoneDevice label="The iAgent welcome screen on iPhone">
+            <SequenceImage
+              frames={[media.mobile.welcome]}
+              alt="The iAgent welcome screen with a Get started button on iPhone"
+              className="device-screen-media"
+            />
+          </IPhoneDevice>
+        </DeviceStage>
+        <div>
+          <p className="artifact-kicker">A native companion from first launch</p>
+          <h3>Start small, then carry the whole day with you</h3>
+          <p>
+            The iPhone app opens into the same local-first system—Today, Codex, Notes, Todos,
+            meetings, and reviewed actions—without turning your work into another cloud workspace.
+          </p>
+        </div>
       </div>
       <CTA href="#meetings">See iAgent in action</CTA>
     </section>
@@ -1464,7 +1666,8 @@ const styles = String.raw`
   .mac-device, .iphone-device { position: relative; z-index: 1; margin: 0; flex: 0 0 auto; filter: drop-shadow(0 26px 34px rgba(0, 0, 0, .45)); }
   .mac-device { width: 100%; aspect-ratio: 1210 / 930; }
   .iphone-device { width: 100%; aspect-ratio: 565 / 1175; }
-  .mac-device-screen, .iphone-device-screen { position: absolute; z-index: 1; overflow: hidden; background: #000; }
+  .mac-device-screen, .iphone-device-screen { position: absolute; z-index: 1; background: #000; }
+  .mac-device-screen { overflow: hidden; }
   .mac-device-screen { left: 1.405%; top: 1.828%; width: 97.19%; height: 70.753%; }
   .iphone-device-screen { left: 4.071%; top: 1.617%; width: 92.035%; height: 96.766%; border-radius: 9.2% / 4.45%; }
   .mac-device-frame, .iphone-device-frame { position: absolute; z-index: 2; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
@@ -1472,6 +1675,9 @@ const styles = String.raw`
   .device-screen-fill { display: block; object-fit: cover; object-position: center top; }
   .device-screen-media { overflow: hidden; }
   .device-screen-media > img, .device-screen-media > video { display: block; object-fit: cover; }
+  .iphone-device-screen .device-screen-media { overflow: visible; }
+  .iphone-device-screen .device-screen-media > img,
+  .iphone-device-screen .device-screen-media > video { border-radius: 9.2% / 4.45%; }
   .mac-desktop-state { position: relative; width: 100%; height: 100%; overflow: hidden; background: #000; }
   .mac-desktop-wallpaper { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; }
   .mac-panel-sequence { position: absolute; z-index: 1; top: 5%; left: 50%; width: 86%; transform: translateX(-50%); }
@@ -1531,6 +1737,19 @@ const styles = String.raw`
     transition: transform 180ms var(--ease-out), background-color 180ms var(--ease-out);
   }
   .sequence-playback:hover { transform: scale(1.04); background: rgba(28,28,30,.92); }
+  .iphone-device-screen .sequence-playback {
+    top: 10px;
+    right: auto;
+    bottom: auto;
+    left: calc(100% + 14px);
+    width: 44px;
+    height: 44px;
+    box-shadow: 0 10px 26px rgba(0,0,0,.34);
+  }
+  .hero-phone-device .sequence-playback {
+    right: calc(100% + 14px);
+    left: auto;
+  }
   @keyframes frame-in { from { opacity: .18; transform: scale(1.006); } to { opacity: 1; transform: scale(1); } }
 
   .capability-section { height: 144px; margin-top: 96px; margin-bottom: 128px; overflow: hidden; }
@@ -1561,8 +1780,8 @@ const styles = String.raw`
   .replaces { margin-top: 3px; color: var(--secondary); font-size: 15px; }
   .replaces strong { color: var(--primary); }
   .editorial-block { margin-top: 54px; max-width: 900px; display: grid; gap: 20px; }
-  .editorial-block h3, .subsection-copy h3, .recorder-copy h3, .private-notes-grid h3, .ask-artifact h3 { font-size: 22px; line-height: 1.2; }
-  .editorial-block p, .subsection-copy p, .recorder-copy > p, .private-notes-grid p, .system-copy p, .section-intro, .mini-features p, .ask-artifact p {
+  .editorial-block h3, .subsection-copy h3, .recorder-copy h3, .private-notes-grid h3, .ask-artifact h3, .mobile-flow-intro h3, .how-onboarding h3 { font-size: 22px; line-height: 1.2; }
+  .editorial-block p, .subsection-copy p, .recorder-copy > p, .private-notes-grid p, .system-copy p, .section-intro, .mini-features p, .ask-artifact p, .mobile-flow-intro > p:last-child, .how-onboarding > div:last-child > p:last-child {
     color: var(--muted);
     font-size: 16px;
     line-height: 28px;
@@ -1615,6 +1834,8 @@ const styles = String.raw`
   .demo-timeline li { position: relative; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.18); }
   .demo-timeline li::before { content: ""; position: absolute; top: -3px; left: 50%; width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,.52); }
   .demo-timeline li:nth-child(2)::before { background: var(--coral); box-shadow: 0 0 0 4px rgba(255,82,74,.14); }
+  .mobile-flow-intro { max-width: 690px; margin: 66px auto 0; display: grid; gap: 12px; text-align: center; }
+  .meeting-mobile-showcase { margin-top: 28px; }
 
   .product-showcase { margin-top: 34px; overflow: hidden; border: 1px solid var(--strong-border); border-radius: 12px; background-color: #111214; background-image: url(${media.stageLight}); background-position: center; background-size: cover; box-shadow: 0 18px 48px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.025); }
   .showcase-blue, .showcase-dark, .showcase-gray, .showcase-warm { background-color: #111214; }
@@ -1641,7 +1862,7 @@ const styles = String.raw`
   .showcase-panel { position: relative; min-height: 692px; padding: 34px 46px 74px; display: flex; align-items: center; justify-content: center; }
   .showcase-panel-desktop, .showcase-panel-desktop-wide { min-height: 650px; }
   .showcase-mac-device { width: min(100%, 826px); }
-  .showcase-phone-device { width: 258px; }
+  .showcase-phone-device { width: 284px; }
   .showcase-caption {
     position: absolute;
     right: 24px;
@@ -1688,7 +1909,7 @@ const styles = String.raw`
   .speech-card { max-width: 665px; margin: 46px 0 0; padding: 18px 22px; border-radius: 20px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--border); font-size: 18px; line-height: 1.5; }
   .ask-artifact { margin-top: 54px; padding: 38px 54px; display: grid; grid-template-columns: 310px 1fr; gap: 56px; align-items: center; overflow: hidden; border: 1px solid var(--strong-border); border-radius: 22px; background: var(--surface); }
   .ask-device-stage { min-height: 560px; padding: 24px; display: grid; place-items: center; }
-  .ask-device-stage .iphone-device { width: 228px; }
+  .ask-device-stage .iphone-device { width: 228px; transform: translateX(-10px); }
   .ask-artifact > div { display: grid; gap: 13px; }
   .artifact-kicker { color: var(--blue) !important; font-size: 13px !important; font-weight: 720; text-transform: uppercase; letter-spacing: .06em !important; }
   .highlight-line { margin-top: 7px; color: var(--secondary); }
@@ -1741,6 +1962,8 @@ const styles = String.raw`
   .mini-features p { min-height: 88px; margin-top: 10px; }
   .mini-media { margin-top: 22px; min-height: 360px; padding: 24px 18px; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--strong-border); border-radius: 16px; background-color: #111214; background-image: url(${media.stageLight}); background-position: center; background-size: cover; }
   .mini-media .mac-device { width: 100%; }
+  .phone-mini-media .iphone-device { width: 148px; }
+  .today-mobile-showcase { margin-top: 42px; }
   #today .proof-card { min-height: 91px; padding: 18px 20px; }
 
   .how-section {
@@ -1765,6 +1988,10 @@ const styles = String.raw`
   .steps-grid article > span { width: 50px; height: 50px; margin: 0 auto 22px; display: grid; place-items: center; border-radius: 50%; color: #050506; background: var(--blue); font-size: 20px; font-weight: 760; }
   .steps-grid h3 { font-size: 19px; }
   .steps-grid p { max-width: 260px; margin: 9px auto 0; color: var(--muted); font-size: 15px; line-height: 1.55; }
+  .how-onboarding { max-width: 780px; margin: 48px auto 0; padding-top: 42px; display: grid; grid-template-columns: 250px 1fr; gap: 44px; align-items: center; border-top: 1px solid var(--line); text-align: left; }
+  .how-onboarding-stage { min-height: 350px; padding: 24px; display: grid; place-items: center; }
+  .how-onboarding-stage .iphone-device { width: 138px; }
+  .how-onboarding > div:last-child { display: grid; gap: 13px; }
   .how-section > .cta { margin-top: 28px; }
 
   .faq-section { margin-bottom: 0; text-align: center; }
@@ -1808,6 +2035,7 @@ const styles = String.raw`
 
   @media (min-width: 761px) and (max-width: 860px) {
     .hero-mac-flow { width: calc(100% - 48px); }
+    .ask-device-stage .iphone-device { transform: translateX(-10px); }
     .recorder-visual .mac-device,
     .inline-mac-stage .mac-device,
     .mini-media .mac-device { width: min(100%, 430px); }
@@ -1835,7 +2063,7 @@ const styles = String.raw`
     .changelog { align-items: flex-start; margin-top: 48px; }
     .hero-stage { height: 420px; min-height: 420px; margin-top: 12px; border-radius: 16px; overflow: hidden; }
     .hero-mac-flow { left: 10px; top: 22px; width: min(314px, calc(100% - 20px)); }
-    .hero-phone-device { top: 210px; right: 14px; width: 100px; }
+    .hero-phone-device { top: 196px; right: 14px; width: 100px; }
     .hero-demo-note { right: 128px; bottom: 14px; left: 18px; font-size: 10px; line-height: 1.35; text-align: left; }
     .demo-playback { right: 2%; bottom: 30%; min-height: 29px; padding: 6px; }
     .demo-playback span { display: none; }
@@ -1852,7 +2080,7 @@ const styles = String.raw`
     .section-header { gap: 10px; }
     .section-header h2 { font-size: 24px; line-height: 32px; letter-spacing: -.6px; }
     .editorial-block { margin-top: 38px; gap: 17px; }
-    .editorial-block p, .subsection-copy p, .recorder-copy > p, .private-notes-grid p, .system-copy p, .section-intro, .mini-features p, .ask-artifact p { font-size: 16px; line-height: 28px; }
+    .editorial-block p, .subsection-copy p, .recorder-copy > p, .private-notes-grid p, .system-copy p, .section-intro, .mini-features p, .ask-artifact p, .mobile-flow-intro > p:last-child, .how-onboarding > div:last-child > p:last-child { font-size: 16px; line-height: 28px; }
     .proof-grid-two, .proof-grid-three { grid-template-columns: 1fr; }
     .proof-card { min-height: 0; padding: 27px 8px; }
     .proof-card + .proof-card { border-top: 1px solid var(--line); border-left: 0; }
@@ -1871,6 +2099,7 @@ const styles = String.raw`
     .meeting-golden-stage .golden-flow { width: 100%; }
     .demo-timeline { right: 12px; bottom: 14px; left: 12px; font-size: 8px; }
     .demo-timeline li { padding-top: 8px; }
+    .mobile-flow-intro { margin-top: 44px; text-align: left; }
     .product-showcase { margin-right: 0; margin-left: 0; border-radius: 12px; }
     .showcase-tabs { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; }
     .showcase-tabs::-webkit-scrollbar { display: none; }
@@ -1905,11 +2134,11 @@ const styles = String.raw`
     .outcome-section > .cta { margin-top: 53px; }
 
     .speech-card { margin-top: 34px; font-size: 17px; }
-    .ask-artifact { margin-top: 38px; padding: 24px 20px; grid-template-columns: 132px 1fr; gap: 20px; }
+    .ask-artifact { margin-top: 38px; padding: 24px 20px; grid-template-columns: 1fr; gap: 28px; }
     #ask { padding-bottom: 0; }
     .ask-proof-grid .proof-card { padding: 16px 8px; }
-    .ask-device-stage { min-height: 306px; padding: 14px; }
-    .ask-device-stage .iphone-device { width: 118px; }
+    .ask-device-stage { min-height: 396px; padding: 18px; }
+    .ask-device-stage .iphone-device { width: 174px; }
     .ask-artifact h3 { font-size: 18px; }
     .ask-artifact p { font-size: 14px; }
     .artifact-kicker { font-size: 10px !important; }
@@ -1936,6 +2165,8 @@ const styles = String.raw`
     .mini-features p { min-height: 0; }
     .mini-media { min-height: 300px; padding: 18px 12px; }
     .mini-media .mac-device { width: min(314px, 100%); }
+    .phone-mini-media .iphone-device { width: 132px; }
+    .today-mobile-showcase { margin-top: 32px; }
     #today .proof-card { min-height: 0; padding: 18px 8px; }
 
     .how-section { width: calc(100% - 48px); min-height: 896px; padding: 64px 40px 40px; }
@@ -1944,7 +2175,10 @@ const styles = String.raw`
     .steps-grid { margin-top: 44px; grid-template-columns: 1fr; gap: 28px; }
     .steps-grid article + article { border-left: 0; }
     .steps-grid article > span { margin-bottom: 14px; }
-    .how-section > .cta { margin-top: 0; }
+    .how-onboarding { margin-top: 36px; padding-top: 34px; grid-template-columns: 1fr; gap: 24px; }
+    .how-onboarding-stage { min-height: 304px; padding: 20px; }
+    .how-onboarding-stage .iphone-device { width: 124px; }
+    .how-section > .cta { margin-top: 24px; }
 
     .faq-section > h2 { font-size: 24px; line-height: 32px; letter-spacing: -.6px; }
     .faq-section > p { line-height: 1.5; }
@@ -1968,7 +2202,9 @@ const styles = String.raw`
     .hero-actions { grid-template-columns: 126px 1fr; }
     .ask-artifact { grid-template-columns: 1fr; }
     .ask-device-stage { width: 100%; }
-    .ask-device-stage .iphone-device { width: 166px; }
+    .ask-device-stage .iphone-device { width: 166px; transform: translateX(-6px); }
+    .iphone-device-screen .sequence-playback { left: calc(100% + 8px); }
+    .hero-phone-device .sequence-playback { right: calc(100% + 14px); left: auto; }
     .system-diagram { grid-template-columns: 1fr 74px 1fr; }
     .diagram-center img { width: 68px; }
     .directory-grid { grid-template-columns: 1fr; }

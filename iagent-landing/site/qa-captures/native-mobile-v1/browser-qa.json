@@ -1,0 +1,760 @@
+{
+  "generatedAt": "2026-08-14T10:14:55.833Z",
+  "responsive": [
+    {
+      "base": {
+        "badTabRefs": 0,
+        "brokenImages": 0,
+        "captionOverlap": [
+          {
+            "area": 0,
+            "i": 0
+          },
+          {
+            "area": 0,
+            "i": 1
+          },
+          {
+            "area": 0,
+            "i": 2
+          },
+          {
+            "area": 0,
+            "i": 3
+          }
+        ],
+        "phones": [
+          {
+            "clip": 0,
+            "i": 0,
+            "width": 154
+          },
+          {
+            "clip": 0,
+            "i": 1,
+            "width": 284
+          },
+          {
+            "clip": 0,
+            "i": 2,
+            "width": 228
+          },
+          {
+            "clip": 0,
+            "i": 3,
+            "width": 284
+          },
+          {
+            "clip": 0,
+            "i": 4,
+            "width": 284
+          },
+          {
+            "clip": 0,
+            "i": 5,
+            "width": 148
+          },
+          {
+            "clip": 0,
+            "i": 6,
+            "width": 138
+          }
+        ],
+        "scrollWidth": 1440,
+        "viewport": [
+          1440,
+          900
+        ]
+      },
+      "sections": [
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": false,
+          "selector": ".meeting-mobile-showcase",
+          "target": null,
+          "visiblePlaying": 1
+        },
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": false,
+          "selector": ".ask-artifact",
+          "target": null,
+          "visiblePlaying": 0
+        },
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": true,
+          "selector": "#knowledge .product-showcase",
+          "target": [
+            44,
+            44
+          ],
+          "visiblePlaying": 1
+        },
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": true,
+          "selector": ".today-mobile-showcase",
+          "target": [
+            44,
+            44
+          ],
+          "visiblePlaying": 1
+        }
+      ]
+    },
+    {
+      "base": {
+        "badTabRefs": 0,
+        "brokenImages": 0,
+        "captionOverlap": [
+          {
+            "area": 0,
+            "i": 0
+          },
+          {
+            "area": 0,
+            "i": 1
+          },
+          {
+            "area": 0,
+            "i": 2
+          },
+          {
+            "area": 0,
+            "i": 3
+          }
+        ],
+        "phones": [
+          {
+            "clip": 0,
+            "i": 0,
+            "width": 154
+          },
+          {
+            "clip": 0,
+            "i": 1,
+            "width": 284
+          },
+          {
+            "clip": 0,
+            "i": 2,
+            "width": 228
+          },
+          {
+            "clip": 0,
+            "i": 3,
+            "width": 284
+          },
+          {
+            "clip": 0,
+            "i": 4,
+            "width": 284
+          },
+          {
+            "clip": 0,
+            "i": 5,
+            "width": 148
+          },
+          {
+            "clip": 0,
+            "i": 6,
+            "width": 138
+          }
+        ],
+        "scrollWidth": 768,
+        "viewport": [
+          768,
+          900
+        ]
+      },
+      "sections": [
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": false,
+          "selector": ".meeting-mobile-showcase",
+          "target": null,
+          "visiblePlaying": 1
+        },
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": false,
+          "selector": ".ask-artifact",
+          "target": null,
+          "visiblePlaying": 0
+        },
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": true,
+          "selector": "#knowledge .product-showcase",
+          "target": [
+            44,
+            44
+          ],
+          "visiblePlaying": 1
+        },
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": true,
+          "selector": ".today-mobile-showcase",
+          "target": [
+            44,
+            44
+          ],
+          "visiblePlaying": 1
+        }
+      ]
+    },
+    {
+      "base": {
+        "badTabRefs": 0,
+        "brokenImages": 0,
+        "captionOverlap": [
+          {
+            "area": 0,
+            "i": 0
+          },
+          {
+            "area": 0,
+            "i": 1
+          },
+          {
+            "area": 0,
+            "i": 2
+          },
+          {
+            "area": 0,
+            "i": 3
+          }
+        ],
+        "phones": [
+          {
+            "clip": 0,
+            "i": 0,
+            "width": 100
+          },
+          {
+            "clip": 0,
+            "i": 1,
+            "width": 190
+          },
+          {
+            "clip": 0,
+            "i": 2,
+            "width": 174
+          },
+          {
+            "clip": 0,
+            "i": 3,
+            "width": 190
+          },
+          {
+            "clip": 0,
+            "i": 4,
+            "width": 190
+          },
+          {
+            "clip": 0,
+            "i": 5,
+            "width": 132
+          },
+          {
+            "clip": 0,
+            "i": 6,
+            "width": 124
+          }
+        ],
+        "scrollWidth": 390,
+        "viewport": [
+          390,
+          844
+        ]
+      },
+      "sections": [
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": false,
+          "selector": ".meeting-mobile-showcase",
+          "target": null,
+          "visiblePlaying": 0
+        },
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": false,
+          "selector": ".ask-artifact",
+          "target": null,
+          "visiblePlaying": 0
+        },
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": true,
+          "selector": "#knowledge .product-showcase",
+          "target": [
+            44,
+            44
+          ],
+          "visiblePlaying": 1
+        },
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": true,
+          "selector": ".today-mobile-showcase",
+          "target": [
+            44,
+            44
+          ],
+          "visiblePlaying": 1
+        }
+      ]
+    },
+    {
+      "base": {
+        "badTabRefs": 0,
+        "brokenImages": 0,
+        "captionOverlap": [
+          {
+            "area": 0,
+            "i": 0
+          },
+          {
+            "area": 0,
+            "i": 1
+          },
+          {
+            "area": 0,
+            "i": 2
+          },
+          {
+            "area": 0,
+            "i": 3
+          }
+        ],
+        "phones": [
+          {
+            "clip": 0,
+            "i": 0,
+            "width": 100
+          },
+          {
+            "clip": 0,
+            "i": 1,
+            "width": 190
+          },
+          {
+            "clip": 0,
+            "i": 2,
+            "width": 166
+          },
+          {
+            "clip": 0,
+            "i": 3,
+            "width": 190
+          },
+          {
+            "clip": 0,
+            "i": 4,
+            "width": 190
+          },
+          {
+            "clip": 0,
+            "i": 5,
+            "width": 132
+          },
+          {
+            "clip": 0,
+            "i": 6,
+            "width": 124
+          }
+        ],
+        "scrollWidth": 320,
+        "viewport": [
+          320,
+          844
+        ]
+      },
+      "sections": [
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": false,
+          "selector": ".meeting-mobile-showcase",
+          "target": null,
+          "visiblePlaying": 0
+        },
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": false,
+          "selector": ".ask-artifact",
+          "target": null,
+          "visiblePlaying": 0
+        },
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": true,
+          "selector": "#knowledge .product-showcase",
+          "target": [
+            44,
+            44
+          ],
+          "visiblePlaying": 1
+        },
+        {
+          "controlClip": 0,
+          "controlScreenOverlap": 0,
+          "hasControl": true,
+          "selector": ".today-mobile-showcase",
+          "target": [
+            44,
+            44
+          ],
+          "visiblePlaying": 1
+        }
+      ]
+    }
+  ],
+  "activeControls": [
+    {
+      "viewport": [
+        1440,
+        900
+      ],
+      "checks": [
+        {
+          "clip": 0,
+          "hasControl": true,
+          "overlap": 0,
+          "playing": 1,
+          "root": ".meeting-mobile-showcase",
+          "target": [
+            44,
+            44
+          ]
+        },
+        {
+          "clip": 0,
+          "hasControl": true,
+          "overlap": 0,
+          "playing": 1,
+          "root": ".ask-artifact",
+          "target": [
+            44,
+            44
+          ]
+        },
+        {
+          "clip": 0,
+          "hasControl": true,
+          "overlap": 0,
+          "playing": 1,
+          "root": "#knowledge .product-showcase",
+          "target": [
+            44,
+            44
+          ]
+        },
+        {
+          "clip": 0,
+          "hasControl": true,
+          "overlap": 0,
+          "playing": 1,
+          "root": ".today-mobile-showcase",
+          "target": [
+            44,
+            44
+          ]
+        }
+      ]
+    },
+    {
+      "viewport": [
+        768,
+        900
+      ],
+      "checks": [
+        {
+          "clip": 0,
+          "hasControl": true,
+          "overlap": 0,
+          "playing": 1,
+          "root": ".meeting-mobile-showcase",
+          "target": [
+            44,
+            44
+          ]
+        },
+        {
+          "clip": 0,
+          "hasControl": true,
+          "overlap": 0,
+          "playing": 1,
+          "root": ".ask-artifact",
+          "target": [
+            44,
+            44
+          ]
+        },
+        {
+          "clip": 0,
+          "hasControl": true,
+          "overlap": 0,
+          "playing": 1,
+          "root": "#knowledge .product-showcase",
+          "target": [
+            44,
+            44
+          ]
+        },
+        {
+          "clip": 0,
+          "hasControl": true,
+          "overlap": 0,
+          "playing": 1,
+          "root": ".today-mobile-showcase",
+          "target": [
+            44,
+            44
+          ]
+        }
+      ]
+    },
+    {
+      "viewport": [
+        390,
+        844
+      ],
+      "checks": [
+        {
+          "clip": 0,
+          "hasControl": true,
+          "overlap": 0,
+          "playing": 1,
+          "root": ".meeting-mobile-showcase",
+          "target": [
+            44,
+            44
+          ]
+        },
+        {
+          "clip": 0,
+          "hasControl": true,
+          "overlap": 0,
+          "playing": 1,
+          "root": ".ask-artifact",
+          "target": [
+            44,
+            44
+          ]
+        },
+        {
+          "clip": 0,
+          "hasControl": true,
+          "overlap": 0,
+          "playing": 1,
+          "root": "#knowledge .product-showcase",
+          "target": [
+            44,
+            44
+          ]
+        },
+        {
+          "clip": 0,
+          "hasControl": true,
+          "overlap": 0,
+          "playing": 1,
+          "root": ".today-mobile-showcase",
+          "target": [
+            44,
+            44
+          ]
+        }
+      ]
+    },
+    {
+      "viewport": [
+        320,
+        844
+      ],
+      "checks": [
+        {
+          "clip": 0,
+          "hasControl": true,
+          "overlap": 0,
+          "playing": 1,
+          "root": ".meeting-mobile-showcase",
+          "target": [
+            44,
+            44
+          ]
+        },
+        {
+          "root": ".ask-artifact",
+          "hasControl": true,
+          "target": [
+            44,
+            44
+          ],
+          "overlap": 0,
+          "clip": 0,
+          "playing": 1
+        },
+        {
+          "clip": 0,
+          "hasControl": true,
+          "overlap": 0,
+          "playing": 1,
+          "root": "#knowledge .product-showcase",
+          "target": [
+            44,
+            44
+          ]
+        },
+        {
+          "clip": 0,
+          "hasControl": true,
+          "overlap": 0,
+          "playing": 1,
+          "root": ".today-mobile-showcase",
+          "target": [
+            44,
+            44
+          ]
+        }
+      ]
+    }
+  ],
+  "tabs": [
+    {
+      "label": "Golden flow",
+      "mediaReady": true,
+      "mediaTag": "VIDEO",
+      "panelExists": true,
+      "selected": "true",
+      "src": "http://127.0.0.1:4173/assets/video/iphone-native-v1-meeting.mp4"
+    },
+    {
+      "label": "Live transcript",
+      "mediaReady": true,
+      "mediaTag": "IMG",
+      "panelExists": true,
+      "selected": "true",
+      "src": "http://127.0.0.1:4173/assets/mobile/native-v1/meeting-live.png"
+    },
+    {
+      "label": "Finished summary",
+      "mediaReady": true,
+      "mediaTag": "IMG",
+      "panelExists": true,
+      "selected": "true",
+      "src": "http://127.0.0.1:4173/assets/mobile/native-v1/meeting-summary.png"
+    },
+    {
+      "label": "Speak naturally",
+      "mediaReady": true,
+      "mediaTag": "VIDEO",
+      "panelExists": true,
+      "selected": "true",
+      "src": "http://127.0.0.1:4173/assets/video/iphone-native-v1-ask.mp4"
+    },
+    {
+      "label": "Review context",
+      "mediaReady": true,
+      "mediaTag": "IMG",
+      "panelExists": true,
+      "selected": "true",
+      "src": "http://127.0.0.1:4173/assets/mobile/native-v1/ask-sources.png"
+    },
+    {
+      "label": "Approve the action",
+      "mediaReady": true,
+      "mediaTag": "IMG",
+      "panelExists": true,
+      "selected": "true",
+      "src": "http://127.0.0.1:4173/assets/mobile/native-v1/ask-review.png"
+    },
+    {
+      "label": "Plain Markdown",
+      "mediaReady": true,
+      "mediaTag": "IMG",
+      "panelExists": true,
+      "selected": "true",
+      "src": "http://127.0.0.1:4173/assets/video/macos-meeting-golden-flow-start.jpg"
+    },
+    {
+      "label": "Local notes",
+      "mediaReady": true,
+      "mediaTag": "VIDEO",
+      "panelExists": true,
+      "selected": "true",
+      "src": "http://127.0.0.1:4173/assets/video/iphone-native-v1-notes.mp4"
+    },
+    {
+      "label": "Meeting records",
+      "mediaReady": true,
+      "mediaTag": "IMG",
+      "panelExists": true,
+      "selected": "true",
+      "src": "http://127.0.0.1:4173/assets/mobile/native-v1/meeting-live.png"
+    },
+    {
+      "label": "See the day",
+      "mediaReady": true,
+      "mediaTag": "VIDEO",
+      "panelExists": true,
+      "selected": "true",
+      "src": "http://127.0.0.1:4173/assets/video/iphone-native-v1-today.mp4"
+    },
+    {
+      "label": "Follow Codex",
+      "mediaReady": true,
+      "mediaTag": "VIDEO",
+      "panelExists": true,
+      "selected": "true",
+      "src": "http://127.0.0.1:4173/assets/video/iphone-native-v1-codex.mp4"
+    },
+    {
+      "label": "Capture a todo",
+      "mediaReady": true,
+      "mediaTag": "VIDEO",
+      "panelExists": true,
+      "selected": "true",
+      "src": "http://127.0.0.1:4173/assets/video/iphone-native-v1-todos.mp4"
+    }
+  ],
+  "menu": {
+    "open": {
+      "exists": true
+    },
+    "closed": {
+      "exists": false
+    }
+  },
+  "faq": {
+    "expanded": "true",
+    "panel": true,
+    "text": "The Mac panel, local Markdown/JSON library, meeting transcript workflow, and des"
+  },
+  "pausePersistence": {
+    "afterPause": {
+      "label": "Play iPhone demo",
+      "paused": true
+    },
+    "afterReturn": {
+      "label": "Play iPhone demo",
+      "paused": true
+    }
+  }
+}
