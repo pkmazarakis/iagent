@@ -20,6 +20,8 @@ The native SwiftUI companion is in [`Mobile/iAgentMobile.xcodeproj`](Mobile/iAge
 
 Both apps remain local-first. The Mac's existing Markdown and JSON files stay canonical, while the iPhone keeps its own local sync store and works offline. Changes queue locally and reconcile through the user's private CloudKit database when connectivity returns. Record payloads use CloudKit encrypted fields. Codex activity, event titles/times/links, note contents, todos, and meeting transcripts are therefore copied to the private `iCloud.com.platon.iagent` container when sync is enabled; raw meeting audio is never stored or synced. Concurrent Todo fields merge independently, and concurrent Note-body edits preserve a conflict copy rather than silently replacing text.
 
+The desktop bridge reads Notes and Todos from `~/Documents/iAgent Library`, Codex task state from the local Codex state database and rollout logs, and Calendar metadata through EventKit. It stages those records in the panel's Application Support sync store, then private CloudKit carries them to the phone's own local store. Calendar and Codex remain read-only on mobile; Notes, Todos, todo lists, and meeting transcripts reconcile in both directions. The shared Calendar window covers the previous 30 days and next 90 days, while the phone also overlays matching events from its own EventKit store.
+
 To run on an iPhone:
 
 1. Connect and trust the iPhone, then open `Mobile/iAgentMobile.xcodeproj` in Xcode.
@@ -57,13 +59,27 @@ xcodebuild -project Mobile/iAgentMobile.xcodeproj \
 
 The ad-hoc-signed Mac build remains fully functional offline. Live CloudKit sync requires the Mac app to be signed with the same Apple Developer Team and iCloud container entitlement.
 
+For a Production CloudKit Mac build that can share TestFlight's private database, provide a Developer ID Application identity and its CloudKit- and push-enabled macOS provisioning profile:
+
+```sh
+IAGENT_CODESIGN_IDENTITY='Developer ID Application: Platon Mazarakis (625CGY297X)' \
+  IAGENT_PROVISIONING_PROFILE=/absolute/path/to/iAgentPanel.provisionprofile \
+  Scripts/build-app.sh
+```
+
+Signed builds default to Swift's release configuration and [`iAgentPanelRelease.entitlements`](Sources/iAgentPanel/iAgentPanelRelease.entitlements). The build fails unless the finished app and embedded profile both grant CloudKit Production, team `625CGY297X`, and container `iCloud.com.platon.iagent`. A verified signed build is kept separately at `.build/iAgentPanel-Production.app`, so a development build cannot overwrite it. The regular ad-hoc build deliberately carries no CloudKit entitlement and reports that state from the sync indicator in the expanded panel header.
+
+Desktop sync state and operational indexes live under `~/Library/Application Support/iAgentPanel`. Existing device, note, and publish indexes are copied there once from the legacy `~/Documents/iAgent Library/.sync` location without deleting or overwriting the originals. If the todo JSON is an undownloaded iCloud placeholder or cannot be decoded, the Mac reports the storage issue and withholds that source from publication instead of turning it into an authoritative empty list.
+
 ## Run
 
 ```sh
 Scripts/run-app.sh
 ```
 
-This builds and ad-hoc signs `.build/iAgentPanel.app`, preserving a stable bundle identity for macOS permissions. The first use of Option-V asks for microphone and speech-recognition access; the first meeting capture also asks for Screen & System Audio Recording access; the first task submission asks for Accessibility access.
+Once a Production-signed companion exists, `run-app.sh` opens that verified build without rebuilding it. Use `Scripts/run-app.sh --development` when you intentionally want to rebuild and launch the offline ad-hoc app.
+
+Before a Production companion exists, this builds and ad-hoc signs `.build/iAgentPanel.app`, preserving a stable bundle identity for macOS permissions. The first use of Option-V asks for microphone and speech-recognition access; the first meeting capture also asks for Screen & System Audio Recording access; the first task submission asks for Accessibility access.
 
 The panel launches at the physical top center of the primary display. Press Option-Space from anywhere on macOS to toggle it; if that shortcut is already owned by another app, iAgent falls back to Control-Option-Space. Press Option-N to jump straight into a new note with the insertion point ready in the editor. You can also scroll over the black notch or click its visible lower edge to expand. Clicking outside an expanded panel preserves the current view in a one-row status header with Calendar, Codex, and todo counts plus the next relevant event time. Click anywhere on that compact header to restore the preserved view; its event time opens Calendar directly. The task list is one continuous scroll surface. Click any row to open that task in Codex, use Up/Down to move the keyboard selection, press Enter to open the selected task, and press Escape or the X button to collapse into the status header.
 

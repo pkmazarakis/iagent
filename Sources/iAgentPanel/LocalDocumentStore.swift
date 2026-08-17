@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum LocalDocumentKind: String, Sendable {
@@ -18,10 +19,14 @@ struct LocalDocument: Identifiable, Sendable, Equatable {
   let title: String
   let body: String
   let createdAt: Date
+  let updatedAt: Date
   let fileURL: URL
 }
 
 struct LocalDocumentStore: Sendable {
+  // UF_DATALESS is defined by Darwin as 0x40000000 but is not imported by Swift.
+  static let datalessFileFlag: UInt32 = 0x40000000
+
   let rootURL: URL
 
   init(rootURL: URL? = nil) {
@@ -62,11 +67,12 @@ struct LocalDocumentStore: Sendable {
       .write(to: fileURL, atomically: true, encoding: .utf8)
 
     return LocalDocument(
-      id: fileURL.path,
+      id: documentID(for: fileURL),
       kind: kind,
       title: title,
       body: body,
       createdAt: now,
+      updatedAt: now,
       fileURL: fileURL
     )
   }
@@ -92,12 +98,78 @@ struct LocalDocumentStore: Sendable {
       title: title,
       body: body,
       createdAt: document.createdAt,
+      updatedAt: Date(),
       fileURL: document.fileURL
     )
   }
 
+  func documents(kind: LocalDocumentKind) throws -> [LocalDocument] {
+    let directory = folderURL(for: kind)
+    let fileManager = FileManager.default
+    guard fileManager.fileExists(atPath: directory.path) else { return [] }
+
+    let keys: Set<URLResourceKey> = [
+      .isRegularFileKey,
+      .creationDateKey,
+      .contentModificationDateKey,
+    ]
+    let fileURLs = try fileManager.contentsOfDirectory(
+      at: directory,
+      includingPropertiesForKeys: Array(keys),
+      options: [.skipsHiddenFiles]
+    )
+
+    return try fileURLs.compactMap { fileURL in
+      guard fileURL.pathExtension.lowercased() == "md" else { return nil }
+      let values = try fileURL.resourceValues(forKeys: keys)
+      guard values.isRegularFile == true else { return nil }
+      guard isMaterializedFile(at: fileURL) else { return nil }
+      let source = try String(contentsOf: fileURL, encoding: .utf8)
+      let parsed = parseMarkdown(
+        source,
+        fallbackTitle: fileURL.deletingPathExtension().lastPathComponent
+      )
+      let createdAt = values.creationDate ?? values.contentModificationDate ?? .distantPast
+      let updatedAt = values.contentModificationDate ?? createdAt
+      return LocalDocument(
+        id: documentID(for: fileURL),
+        kind: kind,
+        title: parsed.title,
+        body: parsed.body,
+        createdAt: createdAt,
+        updatedAt: updatedAt,
+        fileURL: fileURL
+      )
+    }
+    .sorted { lhs, rhs in
+      if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
+      return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+    }
+  }
+
   func folderURL(for kind: LocalDocumentKind) -> URL {
     rootURL.appendingPathComponent(kind.rawValue, isDirectory: true)
+  }
+
+  func documentCount(for kind: LocalDocumentKind) -> Int {
+    (try? documents(kind: kind).count) ?? 0
+  }
+
+  static func isMaterialized(fileSystemFlags: UInt32) -> Bool {
+    (fileSystemFlags & datalessFileFlag) == 0
+  }
+
+  private func isMaterializedFile(at fileURL: URL) -> Bool {
+    var metadata = stat()
+    let readMetadata = fileURL.withUnsafeFileSystemRepresentation { path in
+      guard let path else { return false }
+      return lstat(path, &metadata) == 0
+    }
+    guard readMetadata else {
+      // Preserve the existing error reporting path when metadata itself is unavailable.
+      return true
+    }
+    return Self.isMaterialized(fileSystemFlags: metadata.st_flags)
   }
 
   private func normalizedTitle(
@@ -141,11 +213,41 @@ struct LocalDocumentStore: Sendable {
     return "# \(title)\n\n\(body)\(body.hasSuffix("\n") ? "" : "\n")"
   }
 
+  private func parseMarkdown(
+    _ source: String,
+    fallbackTitle: String
+  ) -> (title: String, body: String) {
+    var lines = source
+      .replacingOccurrences(of: "\r\n", with: "\n")
+      .components(separatedBy: "\n")
+    let firstLine = lines.first?.trimmingCharacters(in: .whitespaces) ?? ""
+    let title: String
+    if firstLine.hasPrefix("# ") {
+      title = String(firstLine.dropFirst(2))
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      lines.removeFirst()
+      while lines.first?.trimmingCharacters(in: .whitespaces).isEmpty == true {
+        lines.removeFirst()
+      }
+    } else {
+      title = fallbackTitle
+    }
+
+    while lines.last?.isEmpty == true {
+      lines.removeLast()
+    }
+    return (title.isEmpty ? fallbackTitle : title, lines.joined(separator: "\n"))
+  }
+
   private func timestamp(_ date: Date) -> String {
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.dateFormat = "yyyy-MM-dd-HHmmss"
     return formatter.string(from: date)
+  }
+
+  private func documentID(for fileURL: URL) -> String {
+    fileURL.standardizedFileURL.resolvingSymlinksInPath().path
   }
 
   private func slug(_ value: String) -> String {

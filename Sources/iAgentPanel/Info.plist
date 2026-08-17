@@ -12,6 +12,8 @@
   <string>com.platon.iagent-panel</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
+  <key>CFBundleIconFile</key>
+  <string>iAgentPanel.icns</string>
   <key>CFBundleName</key>
   <string>iAgent</string>
   <key>CFBundlePackageType</key>
@@ -19,20 +21,32 @@
   <key>CFBundleShortVersionString</key>
   <string>0.2.0</string>
   <key>CFBundleVersion</key>
-  <string>2</string>
+  <string>14</string>
+  <key>ITSAppUsesNonExemptEncryption</key>
+  <false/>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.developer-tools</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
+  <key>LSMultipleInstancesProhibited</key>
+  <true/>
   <key>LSUIElement</key>
   <true/>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSMicrophoneUsageDescription</key>
-	<string>iAgent uses the microphone to transcribe prompts, local notes, and meetings you explicitly start recording.</string>
+  <string>iAgent uses the microphone to transcribe prompts, local notes, and meetings you explicitly start recording.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>iAgent records screen and system audio only when you explicitly start a meeting recording, so it can transcribe the call into a local note.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>iAgent captures system audio only during a meeting recording you explicitly start, so remote participants can be included in the local transcript.</string>
   <key>NSCalendarsFullAccessUsageDescription</key>
   <string>iAgent reads today’s Apple Calendar events to build your private daily briefing.</string>
+  <key>NSContactsUsageDescription</key>
+  <string>iAgent uses Contacts only to show names for message participants you sync from this Mac.</string>
   <key>NSAppleEventsUsageDescription</key>
   <string>iAgent reads saved meeting links from today’s Apple Calendar events so you can join them from the panel.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
-	<string>iAgent uses speech recognition to turn live dictation and meetings you explicitly record into local notes.</string>
+  <string>iAgent uses speech recognition to turn live dictation and meetings you explicitly record into local notes.</string>
 </dict>
 </plist>

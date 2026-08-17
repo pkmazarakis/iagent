@@ -152,6 +152,11 @@ struct CalendarEventTint: Equatable, Sendable {
   }
 
   static let fallback = CalendarEventTint(red: 0.416, green: 0.718, blue: 1)
+
+  var hexString: String {
+    let values = [red, green, blue].map { Int((min(1, max(0, $0)) * 255).rounded()) }
+    return String(format: "#%02X%02X%02X", values[0], values[1], values[2])
+  }
 }
 
 struct CalendarEventItem: Identifiable, Equatable, Sendable {
@@ -163,6 +168,7 @@ struct CalendarEventItem: Identifiable, Equatable, Sendable {
   let isAllDay: Bool
   let calendarTitle: String
   let location: String?
+  let notes: String?
   let linkURLs: [URL]
   let tint: CalendarEventTint
   let updatedAt: Date
@@ -176,6 +182,7 @@ struct CalendarEventItem: Identifiable, Equatable, Sendable {
     isAllDay: Bool,
     calendarTitle: String,
     location: String?,
+    notes: String? = nil,
     linkURLs: [URL] = [],
     tint: CalendarEventTint,
     updatedAt: Date = Date()
@@ -188,6 +195,7 @@ struct CalendarEventItem: Identifiable, Equatable, Sendable {
     self.isAllDay = isAllDay
     self.calendarTitle = calendarTitle
     self.location = location
+    self.notes = notes
     self.linkURLs = linkURLs
     self.tint = tint
     self.updatedAt = updatedAt
@@ -203,6 +211,7 @@ struct CalendarEventItem: Identifiable, Equatable, Sendable {
       isAllDay: isAllDay,
       calendarTitle: calendarTitle,
       location: location,
+      notes: notes,
       linkURLs: linkURLs,
       tint: tint,
       updatedAt: updatedAt
@@ -229,6 +238,7 @@ struct CalendarEventItem: Identifiable, Equatable, Sendable {
 @MainActor
 final class CalendarEventService: ObservableObject {
   @Published private(set) var events: [CalendarEventItem] = []
+  private(set) var syncEvents: [CalendarEventItem] = []
   @Published private(set) var accessState: CalendarAccessState = .idle
   @Published private(set) var referenceNow = Date()
   private(set) var liveDiagnosticLines: [String] = []
@@ -245,6 +255,7 @@ final class CalendarEventService: ObservableObject {
   private var supplementalRefreshTask: Task<Void, Never>?
   private var supplementalLinkCache: [String: [URL]]
   private var hasStarted = false
+  private var lastWideRefreshAt: Date?
 
   private static let supplementalCacheDefaultsKey = "calendarSupplementalLinkCache.v1"
 
@@ -263,6 +274,7 @@ final class CalendarEventService: ObservableObject {
     if smokeTest {
       accessState = .granted
       events = Self.sampleEvents(referenceDate: Date())
+      syncEvents = events
       onChange?()
       return
     }
@@ -319,11 +331,13 @@ final class CalendarEventService: ObservableObject {
           self.refresh(forceReload: true)
         } else {
           self.events = []
+          self.syncEvents = []
           self.onChange?()
         }
       } catch {
         self.accessState = .failed(error.localizedDescription)
         self.events = []
+        self.syncEvents = []
         self.onChange?()
       }
     }
@@ -335,6 +349,7 @@ final class CalendarEventService: ObservableObject {
 
     if smokeTest {
       events = Self.sampleEvents(referenceDate: referenceNow)
+      syncEvents = events
       onChange?()
       return
     }
@@ -348,9 +363,14 @@ final class CalendarEventService: ObservableObject {
     let calendar = Calendar.autoupdatingCurrent
     let start = calendar.startOfDay(for: referenceNow)
     guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return }
+    let syncStart = calendar.date(byAdding: .day, value: -30, to: start) ?? start
+    let syncEnd = calendar.date(byAdding: .day, value: 91, to: start) ?? end
+    let shouldRefreshWide = forceReload
+      || lastWideRefreshAt == nil
+      || referenceNow.timeIntervalSince(lastWideRefreshAt ?? .distantPast) >= 300
     let predicate = eventStore.predicateForEvents(
-      withStart: start,
-      end: end,
+      withStart: shouldRefreshWide ? syncStart : start,
+      end: shouldRefreshWide ? syncEnd : end,
       calendars: nil
     )
     let fetchedEvents = eventStore.events(matching: predicate)
@@ -366,14 +386,29 @@ final class CalendarEventService: ObservableObject {
       }
       liveDiagnosticLines.forEach { print($0) }
     }
-    let mappedEvents = fetchedEvents
+    let mappedSyncEvents = fetchedEvents
       .filter { $0.status != .canceled }
       .map(Self.item(from:))
       .sorted {
         if $0.isAllDay != $1.isAllDay { return $0.isAllDay }
         return $0.startDate < $1.startDate
       }
-    events = mappedEvents.map(applyingSupplementalLinks)
+    let mappedEvents = mappedSyncEvents.map { event in
+      event.startDate < end && event.endDate > start
+        ? applyingSupplementalLinks(to: event)
+        : event
+    }
+    if shouldRefreshWide {
+      syncEvents = mappedEvents
+      lastWideRefreshAt = referenceNow
+    } else {
+      let cachedOutsideToday = syncEvents.filter { !($0.startDate < end && $0.endDate > start) }
+      syncEvents = (cachedOutsideToday + mappedEvents).sorted {
+        if $0.isAllDay != $1.isAllDay { return $0.isAllDay }
+        return $0.startDate < $1.startDate
+      }
+    }
+    events = syncEvents.filter { $0.startDate < end && $0.endDate > start }
     onChange?()
     if forceReload {
       scheduleSupplementalLinkRefresh()
@@ -410,6 +445,7 @@ final class CalendarEventService: ObservableObject {
         }
         self.persistSupplementalLinkCache()
         self.events = self.events.map(self.applyingSupplementalLinks)
+        self.syncEvents = self.syncEvents.map(self.applyingSupplementalLinks)
         self.onChange?()
       case let .failure(message):
         self.supplementalRefreshError = message
@@ -536,6 +572,7 @@ final class CalendarEventService: ObservableObject {
         tint: CalendarEventTint(red: 0.94, green: 0.78, blue: 0.4)
       ),
     ]
+    syncEvents = events
     onChange?()
   }
 
@@ -573,14 +610,17 @@ final class CalendarEventService: ObservableObject {
     case .restricted:
       accessState = .restricted
       events = []
+      syncEvents = []
       onChange?()
     case .denied, .writeOnly:
       accessState = .denied
       events = []
+      syncEvents = []
       onChange?()
     @unknown default:
       accessState = .failed("Calendar access is unavailable")
       events = []
+      syncEvents = []
       onChange?()
     }
   }
@@ -596,6 +636,7 @@ final class CalendarEventService: ObservableObject {
       isAllDay: event.isAllDay,
       calendarTitle: event.calendar.title,
       location: event.location?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+      notes: event.notes?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
       linkURLs: inviteURLs(from: event),
       tint: tint(from: event.calendar.cgColor),
       updatedAt: event.lastModifiedDate ?? event.startDate

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import iAgentCore
 
 enum PanelTheme {
@@ -24,7 +25,13 @@ enum PanelTheme {
   static let horizontalPadding: CGFloat = 24
   static let sheetRadius: CGFloat = 42
   static let quick = Animation.timingCurve(0.165, 0.84, 0.44, 1, duration: 0.2)
+  static let shimmer = Animation.linear(duration: 1.35).repeatForever(autoreverses: false)
   static let disclosure = Animation.timingCurve(0.165, 0.84, 0.44, 1, duration: 0.3)
+  static let pageTransition = Animation.timingCurve(0.165, 0.84, 0.44, 1, duration: 0.3)
+  static let drawerSnap = Animation.smooth(duration: 0.34, extraBounce: 0)
+  static let dockSelection = Animation.smooth(duration: 0.24, extraBounce: 0)
+  static let dockExpand = Animation.timingCurve(0.32, 0.72, 0, 1, duration: 0.28)
+  static let dockCollapse = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.2)
 }
 
 struct PanelScreen<Content: View>: View {
@@ -48,6 +55,8 @@ struct JoiDayMasthead: View {
   let date: Date
   var action: (() -> Void)?
 
+  @State private var flowDirection: CGFloat = 1
+
   var body: some View {
     Button { action?() } label: { masthead }
     .buttonStyle(.plain)
@@ -57,9 +66,16 @@ struct JoiDayMasthead: View {
   private var masthead: some View {
     HStack(alignment: .center) {
       HStack(alignment: .lastTextBaseline, spacing: 8) {
-        Text(dayNumber)
-          .font(.system(size: 52, weight: .bold))
-          .foregroundStyle(PanelTheme.primary)
+        MobileNumberFlowText(
+          dayNumber,
+          fontSize: 52,
+          weight: .bold,
+          color: PanelTheme.primary,
+          reservedWidth: 74,
+          alignment: .leading,
+          direction: flowDirection,
+          lineHeight: 64
+        )
 
         Circle()
           .fill(PanelTheme.coral)
@@ -70,7 +86,16 @@ struct JoiDayMasthead: View {
       Spacer()
 
       VStack(alignment: .trailing, spacing: 0) {
-        Text(monthAndYear)
+        MobileNumberFlowText(
+          monthAndYear,
+          fontSize: 17,
+          weight: .semibold,
+          color: PanelTheme.secondary,
+          reservedWidth: 76,
+          alignment: .trailing,
+          direction: flowDirection,
+          lineHeight: 22
+        )
         Text(date.formatted(.dateTime.weekday(.wide)))
       }
       .font(.system(size: 17, weight: .semibold))
@@ -78,6 +103,9 @@ struct JoiDayMasthead: View {
       .multilineTextAlignment(.trailing)
     }
     .contentShape(Rectangle())
+    .onChange(of: date) { previous, next in
+      flowDirection = next >= previous ? 1 : -1
+    }
   }
 
   private var dayNumber: String {
@@ -116,8 +144,15 @@ struct JoiPageMasthead: View {
       Spacer(minLength: 16)
 
       VStack(alignment: .trailing, spacing: 0) {
-        Text(metric)
-          .foregroundStyle(PanelTheme.primary)
+        MobileNumberFlowText(
+          metric,
+          fontSize: 16,
+          weight: .semibold,
+          color: PanelTheme.primary,
+          alignment: .trailing,
+          direction: 1,
+          lineHeight: 20
+        )
         Text(metricLabel)
           .foregroundStyle(PanelTheme.secondary)
       }
@@ -127,20 +162,70 @@ struct JoiPageMasthead: View {
   }
 }
 
+private enum JoiHeroMetricIcon {
+  case system(String)
+  case asset(String)
+}
+
 struct JoiHeroMetric: View {
-  let symbol: String
+  private let icon: JoiHeroMetricIcon
   let value: String
   var color = PanelTheme.primary
+  var direction: CGFloat = 1
+
+  init(
+    symbol: String,
+    value: String,
+    color: Color = PanelTheme.primary,
+    direction: CGFloat = 1
+  ) {
+    icon = .system(symbol)
+    self.value = value
+    self.color = color
+    self.direction = direction
+  }
+
+  init(
+    assetName: String,
+    value: String,
+    color: Color = PanelTheme.primary,
+    direction: CGFloat = 1
+  ) {
+    icon = .asset(assetName)
+    self.value = value
+    self.color = color
+    self.direction = direction
+  }
 
   var body: some View {
     HStack(spacing: 6) {
+      metricIcon
+      MobileNumberFlowText(
+        value,
+        fontSize: 12,
+        weight: .semibold,
+        color: PanelTheme.primary,
+        alignment: .leading,
+        direction: direction,
+        lineHeight: 16
+      )
+    }
+  }
+
+  @ViewBuilder
+  private var metricIcon: some View {
+    switch icon {
+    case let .system(symbol):
       Image(systemName: symbol)
         .font(.system(size: 13, weight: .semibold))
         .foregroundStyle(color)
-      Text(value)
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(PanelTheme.primary)
-        .contentTransition(.numericText())
+    case let .asset(assetName):
+      Image(assetName)
+        .renderingMode(.template)
+        .resizable()
+        .scaledToFit()
+        .frame(width: 13, height: 13)
+        .foregroundStyle(color)
     }
   }
 }
@@ -156,7 +241,11 @@ struct JoiTimelineSheet<Content: View>: View {
 
   var body: some View {
     content
-      .frame(maxWidth: .infinity, alignment: .topLeading)
+      .frame(
+        maxWidth: .infinity,
+        maxHeight: minHeight == 0 ? .infinity : nil,
+        alignment: .topLeading
+      )
       .frame(minHeight: minHeight, alignment: .top)
       .background {
         UnevenRoundedRectangle(
@@ -168,14 +257,103 @@ struct JoiTimelineSheet<Content: View>: View {
         )
         .fill(PanelTheme.sheet)
       }
+      .clipShape(
+        UnevenRoundedRectangle(
+          topLeadingRadius: PanelTheme.sheetRadius,
+          bottomLeadingRadius: 0,
+          bottomTrailingRadius: 0,
+          topTrailingRadius: PanelTheme.sheetRadius,
+          style: .continuous
+        )
+      )
   }
 }
 
-private struct JoiDrawerScrollOffsetKey: PreferenceKey {
-  static let defaultValue: CGFloat = 0
+private struct JoiDrawerActivationGateKey: EnvironmentKey {
+  static let defaultValue: DrawerActivationGate? = nil
+}
 
-  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-    value = nextValue()
+private struct JoiDrawerNavigationActionKey: EnvironmentKey {
+  nonisolated(unsafe) static let defaultValue: ((AnyView) -> Void)? = nil
+}
+
+extension EnvironmentValues {
+  /// Reference-semantic so UIKit can close the gate synchronously before the
+  /// SwiftUI button action produced by the same touch is evaluated.
+  var joiDrawerActivationGate: DrawerActivationGate? {
+    get { self[JoiDrawerActivationGateKey.self] }
+    set { self[JoiDrawerActivationGateKey.self] = newValue }
+  }
+
+  fileprivate var joiDrawerNavigationAction: ((AnyView) -> Void)? {
+    get { self[JoiDrawerNavigationActionKey.self] }
+    set { self[JoiDrawerNavigationActionKey.self] = newValue }
+  }
+}
+
+/// A drawer-aware button that preserves its label's appearance while suppressing
+/// actions from the touch currently being used to pan the shared sheet.
+struct JoiDrawerButton<Label: View>: View {
+  @Environment(\.joiDrawerActivationGate) private var activationGate
+
+  let role: ButtonRole?
+  let action: () -> Void
+  @ViewBuilder let label: Label
+
+  init(
+    role: ButtonRole? = nil,
+    action: @escaping () -> Void,
+    @ViewBuilder label: () -> Label
+  ) {
+    self.role = role
+    self.action = action
+    self.label = label()
+  }
+
+  var body: some View {
+    Button(role: role) {
+      if let activationGate {
+        activationGate.performIfAllowed(action)
+      } else {
+        action()
+      }
+    } label: {
+      label
+    }
+  }
+}
+
+/// Navigation counterpart to ``JoiDrawerButton``. The drawer owns the actual
+/// NavigationStack presentation so this control can gate its action without
+/// disabling, recoloring, or removing the label during a pan.
+struct JoiDrawerNavigationLink<Destination: View, Label: View>: View {
+  @Environment(\.joiDrawerActivationGate) private var activationGate
+  @Environment(\.joiDrawerNavigationAction) private var navigate
+
+  @ViewBuilder let destination: Destination
+  @ViewBuilder let label: Label
+
+  init(
+    @ViewBuilder destination: () -> Destination,
+    @ViewBuilder label: () -> Label
+  ) {
+    self.destination = destination()
+    self.label = label()
+  }
+
+  var body: some View {
+    Button {
+      let navigationAction: () -> Void = {
+        navigate?(AnyView(destination))
+      }
+      if let activationGate {
+        activationGate.performIfAllowed(navigationAction)
+      } else {
+        navigationAction()
+      }
+    } label: {
+      label
+    }
   }
 }
 
@@ -185,9 +363,11 @@ struct JoiDrawerPage<Hero: View, DrawerContent: View>: View {
   @ViewBuilder let hero: Hero
   @ViewBuilder let drawerContent: DrawerContent
 
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var isExpanded: Bool
-  @State private var dragTranslation: CGFloat = 0
-  @State private var scrollOffset: CGFloat = 0
+  @State private var drawerTranslation: CGFloat = 0
+  @State private var activationGate = DrawerActivationGate()
+  @State private var navigationDestination: AnyView?
 
   init(
     restingFraction: CGFloat = 0.54,
@@ -208,8 +388,9 @@ struct JoiDrawerPage<Hero: View, DrawerContent: View>: View {
     GeometryReader { proxy in
       let upperDetent = min(expandedTop, max(0, proxy.size.height - 190))
       let lowerDetent = restingTop(in: proxy.size.height, upperDetent: upperDetent)
+      let detentTravel = lowerDetent - upperDetent
       let drawerTop = clamped(
-        (isExpanded ? upperDetent : lowerDetent) + dragTranslation,
+        (isExpanded ? upperDetent : lowerDetent) + drawerTranslation,
         lower: upperDetent,
         upper: lowerDetent
       )
@@ -219,96 +400,77 @@ struct JoiDrawerPage<Hero: View, DrawerContent: View>: View {
           .frame(maxWidth: .infinity, alignment: .topLeading)
           .frame(height: lowerDetent, alignment: .top)
 
-        drawer(height: proxy.size.height - upperDetent)
+        drawer(
+          height: proxy.size.height - upperDetent,
+          detentTravel: detentTravel
+        )
           .offset(y: drawerTop)
           .zIndex(1)
-          .simultaneousGesture(
-            drawerDragGesture(upperDetent: upperDetent, lowerDetent: lowerDetent)
-          )
       }
       .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
       .clipped()
     }
     .accessibilityAction(named: isExpanded ? "Collapse list" : "Expand list") {
-      withAnimation(PanelTheme.disclosure) {
-        isExpanded.toggle()
-        dragTranslation = 0
-      }
+      settleDrawer(at: !isExpanded)
+    }
+    .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+    .sensoryFeedback(.impact(weight: .light, intensity: 0.45), trigger: isExpanded)
+    .navigationDestination(
+      isPresented: Binding(
+        get: { navigationDestination != nil },
+        set: { if !$0 { navigationDestination = nil } }
+      )
+    ) {
+      navigationDestination
     }
   }
 
-  private func drawer(height: CGFloat) -> some View {
+  private func drawer(height: CGFloat, detentTravel: CGFloat) -> some View {
     JoiTimelineSheet(minHeight: 0) {
-      scrollView
+      scrollView(detentTravel: detentTravel)
     }
     .frame(height: height, alignment: .top)
     .contentShape(Rectangle())
+    .overlay(alignment: .top) {
+      Capsule(style: .continuous)
+        .fill(PanelTheme.strongBorder)
+        .frame(width: 34, height: 4)
+        .padding(.top, 8)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
   }
 
-  private var scrollView: some View {
+  private func scrollView(detentTravel: CGFloat) -> some View {
     ScrollView {
       Color.clear
         .frame(height: 0)
-        .background {
-          GeometryReader { proxy in
-            Color.clear.preference(
-              key: JoiDrawerScrollOffsetKey.self,
-              value: proxy.frame(in: .named("JoiDrawerScrollSpace")).minY
-            )
-          }
-        }
+        .background(
+          JoiDrawerScrollConfigurator(
+            isExpanded: $isExpanded,
+            drawerTranslation: $drawerTranslation,
+            activationGate: activationGate,
+            detentTravel: detentTravel,
+            onSettle: settleDrawer
+          )
+        )
 
       drawerContent
+        .environment(\.joiDrawerActivationGate, activationGate)
+        .environment(\.joiDrawerNavigationAction) { destination in
+          navigationDestination = destination
+        }
     }
-    .coordinateSpace(name: "JoiDrawerScrollSpace")
-    .scrollDisabled(!isExpanded)
     .scrollDismissesKeyboard(.interactively)
     .scrollIndicators(.hidden)
-    .onPreferenceChange(JoiDrawerScrollOffsetKey.self) { scrollOffset = $0 }
   }
 
-  private func drawerDragGesture(upperDetent: CGFloat, lowerDetent: CGFloat) -> some Gesture {
-    DragGesture(minimumDistance: 4)
-      .onChanged { value in
-        guard abs(value.translation.height) > abs(value.translation.width) else {
-          dragTranslation = 0
-          return
-        }
-
-        if isExpanded {
-          dragTranslation = scrollOffset >= -1.5
-            ? max(0, value.translation.height)
-            : 0
-        } else {
-          dragTranslation = min(0, value.translation.height)
-        }
-      }
-      .onEnded { value in
-        guard abs(value.translation.height) > abs(value.translation.width) else {
-          dragTranslation = 0
-          return
-        }
-
-        let travel = lowerDetent - upperDetent
-        let velocityThreshold = max(44, travel * 0.16)
-        let distanceThreshold = travel * 0.32
-        var targetExpanded = isExpanded
-
-        if isExpanded, scrollOffset >= -3 {
-          targetExpanded = !(
-            value.predictedEndTranslation.height > velocityThreshold
-              || dragTranslation > distanceThreshold
-          )
-        } else if !isExpanded {
-          targetExpanded = value.predictedEndTranslation.height < -velocityThreshold
-            || dragTranslation < -distanceThreshold
-        }
-
-        withAnimation(PanelTheme.disclosure) {
-          isExpanded = targetExpanded
-          dragTranslation = 0
-        }
-      }
+  private func settleDrawer(at targetIsExpanded: Bool) {
+    let animation = reduceMotion ? Animation.linear(duration: 0.12) : PanelTheme.drawerSnap
+    withAnimation(animation) {
+      isExpanded = targetIsExpanded
+      drawerTranslation = 0
+    }
   }
 
   private func restingTop(in height: CGFloat, upperDetent: CGFloat) -> CGFloat {
@@ -322,42 +484,76 @@ struct JoiDrawerPage<Hero: View, DrawerContent: View>: View {
 }
 
 struct JoiWeekStrip: View {
-  let selectedDate: Date
+  @Binding var selectedDate: Date
+  let onSelect: (Date) -> Void
 
   private var days: [Date] {
     let calendar = Calendar.autoupdatingCurrent
-    let day = calendar.startOfDay(for: selectedDate)
-    let weekday = calendar.component(.weekday, from: day)
-    let distanceFromMonday = (weekday + 5) % 7
-    let monday = calendar.date(byAdding: .day, value: -distanceFromMonday, to: day) ?? day
-    return (0 ..< 7).compactMap { calendar.date(byAdding: .day, value: $0, to: monday) }
+    let today = calendar.startOfDay(for: Date())
+    return (-30 ... 90).compactMap { calendar.date(byAdding: .day, value: $0, to: today) }
+  }
+
+  init(
+    selectedDate: Binding<Date>,
+    onSelect: @escaping (Date) -> Void = { _ in }
+  ) {
+    _selectedDate = selectedDate
+    self.onSelect = onSelect
   }
 
   var body: some View {
-    HStack(spacing: 4) {
-      ForEach(days, id: \.self) { day in
-        let selected = Calendar.autoupdatingCurrent.isDate(day, inSameDayAs: selectedDate)
-        VStack(spacing: 4) {
-          Text(day.formatted(.dateTime.day()))
-            .font(.system(size: 15, weight: selected ? .bold : .semibold))
-            .foregroundStyle(selected ? PanelTheme.primary : PanelTheme.tertiary)
-          Text(day.formatted(.dateTime.weekday(.narrow)).uppercased())
-            .font(.system(size: 8, weight: .bold))
-            .foregroundStyle(selected ? PanelTheme.coral : PanelTheme.tertiary)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 48)
-        .background {
-          if selected {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-              .stroke(PanelTheme.strongBorder, lineWidth: 1)
+    ScrollViewReader { proxy in
+      ScrollView(.horizontal) {
+        LazyHStack(spacing: 4) {
+          ForEach(days, id: \.self) { day in
+            let selected = Calendar.autoupdatingCurrent.isDate(day, inSameDayAs: selectedDate)
+            JoiDrawerButton {
+              selectedDate = day
+              onSelect(day)
+            } label: {
+              VStack(spacing: 4) {
+                Text(day.formatted(.dateTime.day()))
+                  .font(.system(size: 15, weight: selected ? .bold : .semibold))
+                  .foregroundStyle(selected ? PanelTheme.primary : PanelTheme.tertiary)
+                Text(day.formatted(.dateTime.weekday(.narrow)).uppercased())
+                  .font(.system(size: 8, weight: .bold))
+                  .foregroundStyle(selected ? PanelTheme.coral : PanelTheme.tertiary)
+              }
+              .frame(width: 46, height: 48)
+              .background {
+                if selected {
+                  RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(PanelTheme.strongBorder, lineWidth: 1)
+                }
+              }
+              .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .id(dayID(day))
+            .accessibilityLabel(day.formatted(date: .complete, time: .omitted))
+            .accessibilityAddTraits(selected ? .isSelected : [])
           }
+        }
+        .scrollTargetLayout()
+        .padding(.horizontal, 20)
+      }
+      .scrollIndicators(.hidden)
+      .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
+      .onAppear {
+        proxy.scrollTo(dayID(selectedDate), anchor: .center)
+      }
+      .onChange(of: selectedDate) { _, date in
+        withAnimation(PanelTheme.quick) {
+          proxy.scrollTo(dayID(date), anchor: .center)
         }
       }
     }
-    .padding(.horizontal, 20)
     .padding(.top, 20)
     .padding(.bottom, 14)
+  }
+
+  private func dayID(_ date: Date) -> Int {
+    Int(Calendar.autoupdatingCurrent.startOfDay(for: date).timeIntervalSinceReferenceDate)
   }
 }
 
@@ -389,8 +585,14 @@ struct JoiSectionHeader: View {
     HStack(spacing: 8) {
       Text(title.uppercased())
       if let count {
-        Text("\(count)")
-          .contentTransition(.numericText())
+        MobileNumberFlowText(
+          "\(count)",
+          fontSize: 10,
+          weight: .bold,
+          color: PanelTheme.tertiary,
+          direction: 1,
+          lineHeight: 14
+        )
       }
       Spacer()
     }
@@ -399,6 +601,583 @@ struct JoiSectionHeader: View {
     .padding(.horizontal, 24)
     .frame(height: 38)
   }
+}
+
+/// Arbitrates the drawer and content pans at the UIKit recognizer layer.
+///
+/// The custom drawer pan gets first refusal. It begins only for an upward pan on
+/// a collapsed drawer, or a downward pan that starts while expanded content is
+/// already at its top boundary. Otherwise it fails and the native UIScrollView
+/// pan proceeds. Ownership is fixed for the whole touch sequence, so the sheet
+/// and its content can never move simultaneously or hand off with a visual jump.
+private struct JoiDrawerScrollConfigurator: UIViewRepresentable {
+  @Binding var isExpanded: Bool
+  @Binding var drawerTranslation: CGFloat
+  let activationGate: DrawerActivationGate
+  let detentTravel: CGFloat
+  let onSettle: (Bool) -> Void
+
+  func makeCoordinator() -> Coordinator {
+    Coordinator(
+      isExpanded: $isExpanded,
+      drawerTranslation: $drawerTranslation,
+      activationGate: activationGate,
+      detentTravel: detentTravel,
+      onSettle: onSettle
+    )
+  }
+
+  func makeUIView(context: Context) -> UIView {
+    let view = UIView(frame: .zero)
+    DispatchQueue.main.async { context.coordinator.attach(from: view) }
+    return view
+  }
+
+  func updateUIView(_ uiView: UIView, context: Context) {
+    context.coordinator.update(
+      isExpanded: $isExpanded,
+      drawerTranslation: $drawerTranslation,
+      activationGate: activationGate,
+      detentTravel: detentTravel,
+      onSettle: onSettle
+    )
+    DispatchQueue.main.async { context.coordinator.attach(from: uiView) }
+  }
+
+  static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
+    coordinator.detach()
+  }
+
+  @MainActor
+  final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+    var isExpanded: Binding<Bool>
+    var drawerTranslation: Binding<CGFloat>
+    var activationGate: DrawerActivationGate
+    var detentTravel: CGFloat
+    var onSettle: (Bool) -> Void
+
+    private weak var scrollView: UIScrollView?
+    private weak var interactionScrollView: UIScrollView?
+    private var drawerPan: UIPanGestureRecognizer?
+    private var activationPan: UIPanGestureRecognizer?
+    private var displayLink: CADisplayLink?
+    private var releaseWorkItem: DispatchWorkItem?
+    private var drawerStartedExpanded = false
+
+    init(
+      isExpanded: Binding<Bool>,
+      drawerTranslation: Binding<CGFloat>,
+      activationGate: DrawerActivationGate,
+      detentTravel: CGFloat,
+      onSettle: @escaping (Bool) -> Void
+    ) {
+      self.isExpanded = isExpanded
+      self.drawerTranslation = drawerTranslation
+      self.activationGate = activationGate
+      self.detentTravel = detentTravel
+      self.onSettle = onSettle
+    }
+
+    func update(
+      isExpanded: Binding<Bool>,
+      drawerTranslation: Binding<CGFloat>,
+      activationGate: DrawerActivationGate,
+      detentTravel: CGFloat,
+      onSettle: @escaping (Bool) -> Void
+    ) {
+      self.isExpanded = isExpanded
+      self.drawerTranslation = drawerTranslation
+      self.activationGate = activationGate
+      self.detentTravel = detentTravel
+      self.onSettle = onSettle
+      configureScrollEnabledState()
+    }
+
+    func attach(from view: UIView) {
+      var ancestor = view.superview
+      while let current = ancestor {
+        if let enclosingScrollView = current as? UIScrollView {
+          configure(enclosingScrollView)
+          return
+        }
+        ancestor = current.superview
+      }
+    }
+
+    func detach() {
+      releaseWorkItem?.cancel()
+      releaseWorkItem = nil
+      displayLink?.invalidate()
+      displayLink = nil
+      if let scrollView {
+        scrollView.panGestureRecognizer.removeTarget(self, action: #selector(contentPanChanged(_:)))
+        if let drawerPan {
+          scrollView.removeGestureRecognizer(drawerPan)
+        }
+        if let activationPan {
+          scrollView.removeGestureRecognizer(activationPan)
+        }
+      }
+      drawerPan?.delegate = nil
+      drawerPan = nil
+      activationPan?.delegate = nil
+      activationPan = nil
+      interactionScrollView = nil
+      scrollView = nil
+      setDrawerTranslation(0)
+      setBlocked(false)
+    }
+
+    private func configure(_ scrollView: UIScrollView) {
+      scrollView.bounces = false
+      scrollView.alwaysBounceVertical = false
+      scrollView.isDirectionalLockEnabled = true
+      scrollView.contentInsetAdjustmentBehavior = .never
+      scrollView.delaysContentTouches = true
+      scrollView.canCancelContentTouches = true
+      scrollView.panGestureRecognizer.cancelsTouchesInView = true
+      scrollView.panGestureRecognizer.delaysTouchesBegan = true
+      scrollView.panGestureRecognizer.delaysTouchesEnded = true
+
+      if self.scrollView !== scrollView {
+        detach()
+        self.scrollView = scrollView
+
+        let drawerPan = UIPanGestureRecognizer(target: self, action: #selector(drawerPanChanged(_:)))
+        drawerPan.delegate = self
+        drawerPan.maximumNumberOfTouches = 1
+        drawerPan.cancelsTouchesInView = true
+        drawerPan.delaysTouchesBegan = false
+        drawerPan.delaysTouchesEnded = true
+        scrollView.addGestureRecognizer(drawerPan)
+        self.drawerPan = drawerPan
+
+        // Observe every pan that starts anywhere inside the drawer, including
+        // horizontal note actions and nested horizontal date strips. This
+        // recognizer never owns movement; it only closes the synchronous action
+        // gate and is allowed to recognize alongside the actual gesture owner.
+        let activationPan = UIPanGestureRecognizer(
+          target: self,
+          action: #selector(activationPanChanged(_:))
+        )
+        activationPan.delegate = self
+        activationPan.maximumNumberOfTouches = 1
+        activationPan.cancelsTouchesInView = true
+        activationPan.delaysTouchesBegan = false
+        activationPan.delaysTouchesEnded = true
+        scrollView.addGestureRecognizer(activationPan)
+        self.activationPan = activationPan
+
+        // Apple documents this failure relationship as the deterministic way to
+        // prefer one recognizer. Native scrolling waits only until the drawer
+        // recognizer decides whether this touch belongs to the drawer.
+        scrollView.panGestureRecognizer.require(toFail: drawerPan)
+        scrollView.panGestureRecognizer.addTarget(
+          self,
+          action: #selector(contentPanChanged(_:))
+        )
+      }
+
+      configureScrollEnabledState()
+    }
+
+    private func configureScrollEnabledState() {
+      guard let scrollView else { return }
+      // Keep the UIScrollView enabled at both detents. UIKit documents that a
+      // disabled scroll view stops accepting touch events, which would also
+      // starve the drawer recognizer attached to it. The failure relationship
+      // above—not toggling this property—is what prevents content movement:
+      // while collapsed an upward pan belongs to `drawerPan`, so the native pan
+      // fails before changing contentOffset.
+      scrollView.isScrollEnabled = true
+
+      if !isExpanded.wrappedValue {
+        let topOffset = -scrollView.adjustedContentInset.top
+        if abs(scrollView.contentOffset.y - topOffset) > 0.5 {
+          scrollView.setContentOffset(
+            CGPoint(x: scrollView.contentOffset.x, y: topOffset),
+            animated: false
+          )
+        }
+      }
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+      guard gestureRecognizer === drawerPan,
+            let pan = gestureRecognizer as? UIPanGestureRecognizer,
+            let scrollView
+      else { return true }
+
+      let velocity = pan.velocity(in: scrollView)
+      let topOffset = -scrollView.adjustedContentInset.top
+      let owner = DrawerGestureArbitration.owner(
+        isExpanded: isExpanded.wrappedValue,
+        contentOffset: Double(scrollView.contentOffset.y),
+        topOffset: Double(topOffset),
+        horizontalVelocity: Double(velocity.x),
+        verticalVelocity: Double(velocity.y)
+      )
+
+      guard owner == .drawer else { return false }
+      drawerStartedExpanded = isExpanded.wrappedValue
+      return true
+    }
+
+    func gestureRecognizer(
+      _ gestureRecognizer: UIGestureRecognizer,
+      shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+      gestureRecognizer === activationPan || otherGestureRecognizer === activationPan
+    }
+
+    @objc private func activationPanChanged(_ recognizer: UIPanGestureRecognizer) {
+      switch recognizer.state {
+      case .began:
+        releaseWorkItem?.cancel()
+        interactionScrollView = scrollViewUnderTouch(recognizer)
+        setBlocked(true)
+      case .changed:
+        releaseWorkItem?.cancel()
+        setBlocked(true)
+      case .ended, .cancelled, .failed:
+        startMonitoring()
+        DispatchQueue.main.async { [weak self] in self?.monitorScrollState() }
+      default:
+        break
+      }
+    }
+
+    @objc private func drawerPanChanged(_ recognizer: UIPanGestureRecognizer) {
+      guard let scrollView else { return }
+
+      switch recognizer.state {
+      case .began:
+        releaseWorkItem?.cancel()
+        setBlocked(true)
+        setDrawerTranslation(0)
+      case .changed:
+        let rawTranslation = recognizer.translation(in: scrollView).y
+        let directedTranslation = drawerStartedExpanded
+          ? max(0, rawTranslation)
+          : min(0, rawTranslation)
+        setDrawerTranslation(
+          min(max(directedTranslation, -detentTravel), detentTravel)
+        )
+      case .ended:
+        finishDrawerPan(recognizer, cancelled: false)
+      case .cancelled, .failed:
+        finishDrawerPan(recognizer, cancelled: true)
+      default:
+        break
+      }
+    }
+
+    private func finishDrawerPan(_ recognizer: UIPanGestureRecognizer, cancelled: Bool) {
+      guard let scrollView else { return }
+      let targetIsExpanded: Bool
+
+      if cancelled {
+        targetIsExpanded = drawerStartedExpanded
+      } else {
+        let velocity = recognizer.velocity(in: scrollView).y
+        targetIsExpanded = DrawerGestureArbitration.targetIsExpanded(
+          startedExpanded: drawerStartedExpanded,
+          translation: Double(drawerTranslation.wrappedValue),
+          verticalVelocity: Double(velocity),
+          detentTravel: Double(detentTravel)
+        )
+      }
+
+      onSettle(targetIsExpanded)
+      scheduleActivationRelease(after: 0.18)
+    }
+
+    @objc private func contentPanChanged(_ recognizer: UIPanGestureRecognizer) {
+
+      switch recognizer.state {
+      case .began, .changed:
+        releaseWorkItem?.cancel()
+        setBlocked(true)
+        startMonitoring()
+      case .ended, .cancelled, .failed:
+        startMonitoring()
+        DispatchQueue.main.async { [weak self] in self?.monitorScrollState() }
+      default:
+        break
+      }
+    }
+
+    private func startMonitoring() {
+      guard displayLink == nil else { return }
+      let link = CADisplayLink(target: self, selector: #selector(displayLinkFired))
+      link.add(to: .main, forMode: .common)
+      displayLink = link
+    }
+
+    @objc private func displayLinkFired() {
+      monitorScrollState()
+    }
+
+    private func monitorScrollState() {
+      guard let scrollView else {
+        finishMonitoring()
+        return
+      }
+
+      let outerScrollIsMoving = scrollView.isTracking
+        || scrollView.isDragging
+        || scrollView.isDecelerating
+      let touchedScrollIsMoving = interactionScrollView?.isTracking == true
+        || interactionScrollView?.isDragging == true
+        || interactionScrollView?.isDecelerating == true
+
+      if outerScrollIsMoving || touchedScrollIsMoving {
+        releaseWorkItem?.cancel()
+        setBlocked(true)
+        return
+      }
+
+      finishMonitoring()
+      scheduleActivationRelease(after: 0.12)
+    }
+
+    private func finishMonitoring() {
+      displayLink?.invalidate()
+      displayLink = nil
+    }
+
+    private func scheduleActivationRelease(after delay: TimeInterval) {
+      releaseWorkItem?.cancel()
+      let workItem = DispatchWorkItem { [weak self] in self?.setBlocked(false) }
+      releaseWorkItem = workItem
+      DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func setDrawerTranslation(_ translation: CGFloat) {
+      guard drawerTranslation.wrappedValue != translation else { return }
+      var transaction = Transaction()
+      transaction.disablesAnimations = true
+      withTransaction(transaction) {
+        drawerTranslation.wrappedValue = translation
+      }
+    }
+
+    private func setBlocked(_ blocked: Bool) {
+      activationGate.setBlocked(blocked)
+    }
+
+    private func scrollViewUnderTouch(_ recognizer: UIPanGestureRecognizer) -> UIScrollView? {
+      guard let scrollView else { return nil }
+      let location = recognizer.location(in: scrollView)
+      var candidate = scrollView.hitTest(location, with: nil)
+
+      while let view = candidate, view !== scrollView {
+        if let touchedScrollView = view as? UIScrollView {
+          return touchedScrollView
+        }
+        candidate = view.superview
+      }
+      return scrollView
+    }
+  }
+}
+
+struct JoiAudioWaveform: View {
+  let levels: [CGFloat]
+  var color = PanelTheme.coral
+  var isActive = true
+
+  var body: some View {
+    Canvas { context, size in
+      let barCount = max(18, Int(size.width / 3.2))
+      let samples = resampledLevels(count: barCount)
+      let stride = size.width / CGFloat(barCount)
+      let barWidth = max(1, min(1.7, stride * 0.48))
+
+      for index in samples.indices {
+        let signal = smoothedLevel(at: index, in: samples)
+        let normalized = isActive ? min(1, max(0, (signal - 0.06) / 0.5)) : 0
+        let height = max(2, 2 + (size.height - 2) * pow(normalized, 0.72))
+        let rect = CGRect(
+          x: CGFloat(index) * stride + (stride - barWidth) / 2,
+          y: (size.height - height) / 2,
+          width: barWidth,
+          height: height
+        )
+        context.fill(
+          Path(roundedRect: rect, cornerRadius: barWidth / 2),
+          with: .color((isActive ? color : PanelTheme.tertiary).opacity(0.82))
+        )
+      }
+    }
+    .accessibilityLabel(isActive ? "Live audio level" : "Audio idle")
+  }
+
+  private func resampledLevels(count: Int) -> [CGFloat] {
+    WaveformSampleProjector.project(
+      levels.map { Double($0) },
+      count: count,
+      baseline: 0.06
+    )
+    .map { CGFloat($0) }
+  }
+
+  private func smoothedLevel(at index: Int, in samples: [CGFloat]) -> CGFloat {
+    let previous = samples[max(0, index - 1)]
+    let current = samples[index]
+    let next = samples[min(samples.count - 1, index + 1)]
+    return previous * 0.22 + current * 0.56 + next * 0.22
+  }
+}
+
+struct MobileNumberFlowText: View {
+  let text: String
+  let fontSize: CGFloat
+  let weight: Font.Weight
+  let color: Color
+  let reservedWidth: CGFloat?
+  let alignment: Alignment
+  let direction: CGFloat
+  let lineHeight: CGFloat
+
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var previousText: String
+  @State private var currentText: String
+  @State private var settled = true
+
+  init(
+    _ text: String,
+    fontSize: CGFloat,
+    weight: Font.Weight = .medium,
+    color: Color = .primary,
+    reservedWidth: CGFloat? = nil,
+    alignment: Alignment = .center,
+    direction: CGFloat,
+    lineHeight: CGFloat? = nil
+  ) {
+    self.text = text
+    self.fontSize = fontSize
+    self.weight = weight
+    self.color = color
+    self.reservedWidth = reservedWidth
+    self.alignment = alignment
+    self.direction = direction
+    self.lineHeight = lineHeight ?? ceil(fontSize * 1.4)
+    _previousText = State(initialValue: text)
+    _currentText = State(initialValue: text)
+  }
+
+  var body: some View {
+    Group {
+      if reduceMotion {
+        Text(text)
+          .font(flowFont)
+          .foregroundStyle(color)
+      } else {
+        flowingGlyphs
+      }
+    }
+    .frame(width: reservedWidth, height: lineHeight, alignment: alignment)
+    .clipped()
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(text)
+    .onChange(of: text) { _, nextText in animate(to: nextText) }
+  }
+
+  private var flowingGlyphs: some View {
+    let oldGlyphs = paddedGlyphs(previousText)
+    let newGlyphs = paddedGlyphs(currentText)
+
+    return HStack(spacing: 0) {
+      ForEach(Array(zip(oldGlyphs, newGlyphs).enumerated()), id: \.offset) { _, pair in
+        MobileNumberFlowGlyph(
+          previous: pair.0,
+          current: pair.1,
+          settled: settled,
+          direction: direction,
+          font: flowFont,
+          color: color,
+          width: glyphWidth,
+          height: lineHeight
+        )
+      }
+    }
+    .fixedSize(horizontal: true, vertical: false)
+  }
+
+  private var flowFont: Font { .system(size: fontSize, weight: weight, design: .monospaced) }
+  private var glyphWidth: CGFloat { ceil(fontSize * 0.64) }
+
+  private func paddedGlyphs(_ value: String) -> [Character?] {
+    let width = max(previousText.count, currentText.count)
+    let glyphs = Array(value).map(Optional.some)
+    return Array(repeating: nil, count: max(0, width - glyphs.count)) + glyphs
+  }
+
+  private func animate(to nextText: String) {
+    guard nextText != currentText else { return }
+    previousText = currentText
+    currentText = nextText
+    guard !reduceMotion else {
+      previousText = nextText
+      settled = true
+      return
+    }
+
+    settled = false
+    DispatchQueue.main.async {
+      withAnimation(.timingCurve(0.165, 0.84, 0.44, 1, duration: 0.3)) {
+        settled = true
+      }
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+      guard currentText == nextText else { return }
+      previousText = nextText
+    }
+  }
+}
+
+private struct MobileNumberFlowGlyph: View {
+  let previous: Character?
+  let current: Character?
+  let settled: Bool
+  let direction: CGFloat
+  let font: Font
+  let color: Color
+  let width: CGFloat
+  let height: CGFloat
+
+  var body: some View {
+    ZStack {
+      if previous == current {
+        glyph(current)
+      } else if isDigit(previous) || isDigit(current) {
+        glyph(previous)
+          .offset(y: settled ? -direction * height : 0)
+          .opacity(settled ? 0 : 1)
+        glyph(current)
+          .offset(y: settled ? 0 : direction * height)
+          .opacity(settled ? 1 : 0.35)
+      } else {
+        glyph(previous).opacity(settled ? 0 : 1)
+        glyph(current).opacity(settled ? 1 : 0)
+      }
+    }
+    .frame(width: width, height: height)
+    .clipped()
+  }
+
+  @ViewBuilder
+  private func glyph(_ character: Character?) -> some View {
+    if let character {
+      Text(String(character))
+        .font(font)
+        .foregroundStyle(color)
+        .frame(width: width, height: height)
+    }
+  }
+
+  private func isDigit(_ character: Character?) -> Bool { character?.isNumber == true }
 }
 
 struct JoiTimelineRow<Leading: View, Content: View, Trailing: View>: View {
@@ -527,9 +1306,13 @@ struct SyncStatusButton: View {
               .background(PanelTheme.amber, in: Circle())
           }
         }
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
     .accessibilityLabel(accessibilityText)
+    .accessibilityHint("Open sync details")
+    .accessibilityIdentifier("sync-status-button")
   }
 
   private var statusSymbol: String {
@@ -555,6 +1338,35 @@ struct SyncStatusButton: View {
     if let message = status.message { return message }
     if pendingCount > 0 { return "\(pendingCount) changes waiting to sync" }
     return status.phase == .syncing ? "Syncing" : "Synced"
+  }
+}
+
+struct SettingsButton: View {
+  let showsAttentionBadge: Bool
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: "gearshape")
+        .font(.system(size: 15, weight: .semibold))
+        .foregroundStyle(PanelTheme.secondary)
+        .frame(width: 44, height: 44)
+        .background(PanelTheme.surface, in: Circle())
+        .overlay(alignment: .topTrailing) {
+          if showsAttentionBadge {
+            Circle()
+              .fill(PanelTheme.amber)
+              .frame(width: 9, height: 9)
+              .overlay {
+                Circle().stroke(PanelTheme.canvas, lineWidth: 2)
+              }
+          }
+        }
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(showsAttentionBadge ? "Settings, sync needs attention" : "Settings")
+    .accessibilityHint("Opens settings and sync controls")
+    .accessibilityIdentifier("home.settings")
   }
 }
 

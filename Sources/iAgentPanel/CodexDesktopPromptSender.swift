@@ -12,6 +12,38 @@ struct CodexDesktopPromptError: LocalizedError, Sendable {
 final class CodexDesktopPromptSender {
   private let bundleIdentifier = "com.openai.codex"
 
+  func startNewThread(_ text: String) async throws {
+    let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !prompt.isEmpty else {
+      throw CodexDesktopPromptError(message: "Enter a prompt for the new Codex task.")
+    }
+    try requireAccessibility()
+    guard let applicationURL = NSWorkspace.shared.urlForApplication(
+      withBundleIdentifier: bundleIdentifier
+    ) else {
+      throw CodexDesktopPromptError(message: "Install Codex before starting a task.")
+    }
+    _ = try await NSWorkspace.shared.openApplication(
+      at: applicationURL,
+      configuration: NSWorkspace.OpenConfiguration()
+    )
+    let application = try await waitForCodexApplication()
+    _ = application.activate()
+    try await Task.sleep(for: .milliseconds(500))
+    try postShortcut(keyCode: 45, flags: .maskCommand)
+    try await Task.sleep(for: .milliseconds(500))
+    let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
+    let composer = try await waitForComposer(in: applicationElement)
+    guard AXUIElementSetAttributeValue(
+      composer,
+      kAXFocusedAttribute as CFString,
+      kCFBooleanTrue
+    ) == .success else {
+      throw CodexDesktopPromptError(message: "Could not focus the new Codex prompt field.")
+    }
+    try await pasteAndSubmit(prompt)
+  }
+
   func sendPrompt(_ text: String, to threadID: String) async throws {
     let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !prompt.isEmpty else {
@@ -21,14 +53,7 @@ final class CodexDesktopPromptSender {
       throw CodexDesktopPromptError(message: "The Codex task link is invalid.")
     }
 
-    let trustOptions = [
-      "AXTrustedCheckOptionPrompt": true,
-    ] as CFDictionary
-    guard AXIsProcessTrustedWithOptions(trustOptions) else {
-      throw CodexDesktopPromptError(
-        message: "Allow iAgent in System Settings > Privacy & Security > Accessibility, then press Enter again."
-      )
-    }
+    try requireAccessibility()
 
     guard NSWorkspace.shared.open(threadURL) else {
       throw CodexDesktopPromptError(message: "Could not open the task in Codex.")
@@ -56,6 +81,15 @@ final class CodexDesktopPromptSender {
     {
       throw CodexDesktopPromptError(
         message: "Codex did not accept the prompt. Keep the task open and press Enter again."
+      )
+    }
+  }
+
+  private func requireAccessibility() throws {
+    let trustOptions = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+    guard AXIsProcessTrustedWithOptions(trustOptions) else {
+      throw CodexDesktopPromptError(
+        message: "Allow iAgent in System Settings > Privacy & Security > Accessibility, then try again."
       )
     }
   }

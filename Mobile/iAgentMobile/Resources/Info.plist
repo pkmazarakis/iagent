@@ -16,18 +16,46 @@
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.platon.iagent.mobile</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>iagent</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>IAGENTOpenAIRelayURL</key>
+	<string>$(IAGENT_OPENAI_RELAY_URL)</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>iAgent shows your calendar schedule alongside your synced work.</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>iAgent opens calendar drafts you confirm in Apple’s event editor.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>iAgent uses the microphone to transcribe meeting notes you choose to record.</string>
+	<string>iAgent uses the microphone to transcribe voice requests, notes, meetings, and todos you choose to record.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>iAgent transcribes meetings into private local notes.</string>
+	<string>iAgent turns your speech into private local voice requests, notes, meeting transcripts, and todos.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIBackgroundModes</key>

@@ -237,34 +237,149 @@ extension NativeTextViewWrapper.Coordinator {
     private func applyList(prefix: String) {
         guard let tv = textView else { return }
         let nsText = tv.string as NSString
-        let selRange = tv.selectedRange()
-        let startLine = nsText.lineRange(for: selRange)
-        let originalLine = nsText.substring(with: startLine)
-        let lineText = originalLine.trimmingCharacters(in: .newlines)
-        var content = lineText
-        if content.hasPrefix(prefix) {
-            content = String(content.dropFirst(prefix.count))
-        }
-        let newLine = prefix + content
-        let suffix = originalLine.hasSuffix("\n") ? "\n" : ""
-        let replacement = newLine + suffix
-        // See applyHeading: `content` survives verbatim, so its attributes must
-        // travel with it or a wiki link on this line loses its UUID.
-        let contentRange = (originalLine as NSString).range(of: content)
-        let retained = contentRange.location == NSNotFound
-            ? NSRange(location: startLine.location, length: 0)
-            : NSRange(location: startLine.location + contentRange.location, length: contentRange.length)
-        guard replacePreservingAttributes(
-            in: startLine,
-            with: replacement,
-            retaining: retained,
-            at: (prefix as NSString).length
-        ) else { return }
-        let newSel = NSRange(
-            location: startLine.location + (prefix as NSString).length,
-            length: (content as NSString).length
+        let selection = tv.selectedRange()
+        // NSRange's upper bound is exclusive. A selection ending at the start
+        // of the following line must not format that following line.
+        let lineProbe = selection.length > 0
+            ? NSRange(location: selection.location, length: selection.length - 1)
+            : selection
+        let paragraphRange = nsText.lineRange(for: lineProbe)
+        let targetPattern = prefix == "1. "
+            ? #"^([ \t]*)\d+[.)][ \t]+"#
+            : #"^([ \t]*)[-*+•][ \t]+"#
+        let targetRegex = try! NSRegularExpression(pattern: targetPattern)
+        let anyListRegex = try! NSRegularExpression(
+            pattern: #"^([ \t]*)(?:[-*+•]|\d+[.)])[ \t]+"#
         )
-        tv.setSelectedRange(newSel)
+
+        struct PrefixEdit {
+            let range: NSRange
+            let replacement: String
+        }
+
+        var lines: [(range: NSRange, text: NSString)] = []
+        var location = paragraphRange.location
+        let end = NSMaxRange(paragraphRange)
+        while location < end {
+            let lineRange = nsText.lineRange(for: NSRange(location: location, length: 0))
+            lines.append((lineRange, nsText.substring(with: lineRange) as NSString))
+            let next = NSMaxRange(lineRange)
+            guard next > location else { break }
+            location = next
+        }
+        if lines.isEmpty {
+            lines.append((paragraphRange, nsText.substring(with: paragraphRange) as NSString))
+        }
+
+        let meaningfulLines = lines.filter {
+            ($0.text as String).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
+        // A caret on an empty line creates an empty list row. Blank separator
+        // lines inside a multiline selection remain untouched.
+        let targetLines = selection.length == 0 ? lines : meaningfulLines
+        guard !targetLines.isEmpty else { return }
+        let removesList = targetLines.allSatisfy { line in
+            targetRegex.firstMatch(
+                in: line.text as String,
+                range: NSRange(location: 0, length: line.text.length)
+            ) != nil
+        }
+
+        var edits: [PrefixEdit] = []
+        for line in targetLines {
+            let localRange = NSRange(location: 0, length: line.text.length)
+            if removesList,
+               let existing = targetRegex.firstMatch(in: line.text as String, range: localRange)
+            {
+                let indentation = line.text.substring(with: existing.range(at: 1))
+                edits.append(PrefixEdit(
+                    range: NSRange(
+                        location: line.range.location + existing.range.location,
+                        length: existing.range.length
+                    ),
+                    replacement: indentation
+                ))
+                continue
+            }
+
+            if let existing = anyListRegex.firstMatch(in: line.text as String, range: localRange) {
+                let indentation = line.text.substring(with: existing.range(at: 1))
+                edits.append(PrefixEdit(
+                    range: NSRange(
+                        location: line.range.location + existing.range.location,
+                        length: existing.range.length
+                    ),
+                    replacement: indentation + prefix
+                ))
+                continue
+            }
+
+            let indentation = line.text.range(of: #"^[ \t]*"#, options: .regularExpression)
+            let indentationLength = indentation.location == NSNotFound ? 0 : indentation.length
+            edits.append(PrefixEdit(
+                range: NSRange(location: line.range.location + indentationLength, length: 0),
+                replacement: prefix
+            ))
+        }
+
+        guard !edits.isEmpty else { return }
+        guard let storage = tv.textStorage else { return }
+        let replacement = NSMutableAttributedString(
+            attributedString: storage.attributedSubstring(from: paragraphRange)
+        )
+        for edit in edits.sorted(by: { $0.range.location > $1.range.location }) {
+            let localRange = NSRange(
+                location: edit.range.location - paragraphRange.location,
+                length: edit.range.length
+            )
+            replacement.replaceCharacters(
+                in: localRange,
+                with: NSAttributedString(string: edit.replacement, attributes: tv.typingAttributes)
+            )
+        }
+
+        tv.undoManager?.beginUndoGrouping()
+        defer {
+            tv.undoManager?.endUndoGrouping()
+            let type = prefix == "1. " ? "Numbered List" : "Bulleted List"
+            tv.undoManager?.setActionName(removesList ? "Remove \(type)" : type)
+        }
+
+        // Publish this as one attributed edit. Multiple prefix mutations followed
+        // by one didChangeText event leave the storage/display bridge with only
+        // the final sub-edit's range and can corrupt the Markdown writeback.
+        isProgrammaticEdit = true
+        defer { isProgrammaticEdit = false }
+        guard tv.shouldChangeText(in: paragraphRange, replacementString: replacement.string) else {
+            return
+        }
+        storage.replaceCharacters(in: paragraphRange, with: replacement)
+        pendingListStructureEdit = true
+        tv.didChangeText()
+
+        let ascendingEdits = edits.sorted { $0.range.location < $1.range.location }
+        func mappedPosition(_ originalPosition: Int) -> Int {
+            var delta = 0
+            for edit in ascendingEdits {
+                let oldStart = edit.range.location
+                let oldEnd = NSMaxRange(edit.range)
+                let replacementLength = (edit.replacement as NSString).length
+
+                if originalPosition < oldStart { break }
+                if edit.range.length > 0, originalPosition < oldEnd {
+                    return oldStart + delta + replacementLength
+                }
+                delta += replacementLength - edit.range.length
+            }
+            return originalPosition + delta
+        }
+
+        let mappedStart = mappedPosition(selection.location)
+        let mappedEnd = mappedPosition(NSMaxRange(selection))
+        tv.setSelectedRange(NSRange(
+            location: mappedStart,
+            length: max(0, mappedEnd - mappedStart)
+        ))
     }
 
     @objc func didMarkdownUnorderedList(_ sender: Any?) {

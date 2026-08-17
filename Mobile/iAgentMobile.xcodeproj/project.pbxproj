@@ -19,7 +19,60 @@
 		A1000000000000000000000A /* TodosMobileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* TodosMobileView.swift */; };
 		A1000000000000000000000B /* MeetingRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* MeetingRecorderView.swift */; };
 		A1000000000000000000000C /* iAgentCore in Frameworks */ = {isa = PBXBuildFile; productRef = A90000000000000000000002 /* iAgentCore */; };
+		A1000000000000000000000D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000F /* Assets.xcassets */; };
+		A1000000000000000000000E /* TodoCreationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* TodoCreationView.swift */; };
+		B10000000000000000000001 /* MobileWelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* MobileWelcomeView.swift */; };
+		B10000000000000000000002 /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000002 /* AppIcon.png */; };
+		C10000000000000000000001 /* MeetingSummaryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000001 /* MeetingSummaryModel.swift */; };
+		D10000000000000000000001 /* LiveSpeechAnalyzerAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001 /* LiveSpeechAnalyzerAdapter.swift */; };
+		E10000000000000000000001 /* AskIAgentModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000001 /* AskIAgentModel.swift */; };
+		E10000000000000000000002 /* AskIAgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000002 /* AskIAgentView.swift */; };
+		E10000000000000000000003 /* AskIAgentHistoryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000003 /* AskIAgentHistoryModel.swift */; };
+		E10000000000000000000004 /* AskIAgentV2Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000004 /* AskIAgentV2Harness.swift */; };
+		F10000000000000000000001 /* AskIAgentRemoteTokenProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000001 /* AskIAgentRemoteTokenProvider.swift */; };
+		865300000000000000000001 /* WidgetNavigationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 865300000000000000000007 /* WidgetNavigationViews.swift */; };
+		865300000000000000000002 /* iAgentWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 865300000000000000000008 /* iAgentWidgets.swift */; };
+		865300000000000000000003 /* iAgentCore in Frameworks */ = {isa = PBXBuildFile; productRef = 865300000000000000000015 /* iAgentCore */; };
+		865300000000000000000004 /* iAgentWidgets.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 86530000000000000000000B /* iAgentWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		9A1000000000000000000001 /* VoiceEdgeEffectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A2000000000000000000001 /* VoiceEdgeEffectView.swift */; };
+		9A1000000000000000000002 /* VoiceEdgeEffect.metal in Sources */ = {isa = PBXBuildFile; fileRef = 9A2000000000000000000002 /* VoiceEdgeEffect.metal */; };
+		7A1000000000000000000001 /* PriorityLiveActivityController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A2000000000000000000001 /* PriorityLiveActivityController.swift */; };
+		B30000000000000000000001 /* MobileSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B30000000000000000000004 /* MobileSettingsView.swift */; };
+		B30000000000000000000002 /* MobileSettingsPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B30000000000000000000005 /* MobileSettingsPresentationTests.swift */; };
+		AC7100000000000000000001 /* iAgentActions in Frameworks */ = {isa = PBXBuildFile; productRef = AC7100000000000000000002 /* iAgentActions */; };
+		D51000000000000000000001 /* MessagesMobileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D52000000000000000000001 /* MessagesMobileView.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		865300000000000000000005 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A60000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 86530000000000000000000E;
+			remoteInfo = iAgentWidgets;
+		};
+		B30000000000000000000003 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A60000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A50000000000000000000001;
+			remoteInfo = iAgentMobile;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		865300000000000000000006 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				865300000000000000000004 /* iAgentWidgets.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		A20000000000000000000001 /* iAgentMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iAgentMobileApp.swift; sourceTree = "<group>"; };
@@ -36,6 +89,30 @@
 		A2000000000000000000000C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A2000000000000000000000D /* iAgentMobile.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iAgentMobile.entitlements; sourceTree = "<group>"; };
 		A2000000000000000000000E /* iAgent.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iAgent.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A2000000000000000000000F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A20000000000000000000010 /* iAgentMobileRelease.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iAgentMobileRelease.entitlements; sourceTree = "<group>"; };
+		A20000000000000000000011 /* TodoCreationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoCreationView.swift; sourceTree = "<group>"; };
+		B20000000000000000000001 /* MobileWelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileWelcomeView.swift; sourceTree = "<group>"; };
+		B20000000000000000000002 /* AppIcon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Assets.xcassets/AppIcon.appiconset/AppIcon.png; sourceTree = "<group>"; };
+		C20000000000000000000001 /* MeetingSummaryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryModel.swift; sourceTree = "<group>"; };
+		D20000000000000000000001 /* LiveSpeechAnalyzerAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSpeechAnalyzerAdapter.swift; sourceTree = "<group>"; };
+		E20000000000000000000001 /* AskIAgentModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskIAgentModel.swift; sourceTree = "<group>"; };
+		E20000000000000000000002 /* AskIAgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskIAgentView.swift; sourceTree = "<group>"; };
+		E20000000000000000000003 /* AskIAgentHistoryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskIAgentHistoryModel.swift; sourceTree = "<group>"; };
+		E20000000000000000000004 /* AskIAgentV2Harness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskIAgentV2Harness.swift; sourceTree = "<group>"; };
+		F20000000000000000000001 /* AskIAgentRemoteTokenProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskIAgentRemoteTokenProvider.swift; sourceTree = "<group>"; };
+		865300000000000000000007 /* WidgetNavigationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetNavigationViews.swift; sourceTree = "<group>"; };
+		865300000000000000000008 /* iAgentWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iAgentWidgets.swift; sourceTree = "<group>"; };
+		865300000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		86530000000000000000000A /* iAgentWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iAgentWidgets.entitlements; sourceTree = "<group>"; };
+		86530000000000000000000B /* iAgentWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = iAgentWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		9A2000000000000000000001 /* VoiceEdgeEffectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceEdgeEffectView.swift; sourceTree = "<group>"; };
+		9A2000000000000000000002 /* VoiceEdgeEffect.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = VoiceEdgeEffect.metal; sourceTree = "<group>"; };
+		7A2000000000000000000001 /* PriorityLiveActivityController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PriorityLiveActivityController.swift; sourceTree = "<group>"; };
+		B30000000000000000000004 /* MobileSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileSettingsView.swift; sourceTree = "<group>"; };
+		B30000000000000000000005 /* MobileSettingsPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileSettingsPresentationTests.swift; sourceTree = "<group>"; };
+		B30000000000000000000006 /* iAgentMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iAgentMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D52000000000000000000001 /* MessagesMobileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesMobileView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -44,6 +121,22 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000000000000000000000C /* iAgentCore in Frameworks */,
+				AC7100000000000000000001 /* iAgentActions in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		86530000000000000000000C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				865300000000000000000003 /* iAgentCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B30000000000000000000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -54,6 +147,8 @@
 			isa = PBXGroup;
 			children = (
 				A40000000000000000000002 /* iAgentMobile */,
+				86530000000000000000000D /* iAgentWidgets */,
+				B30000000000000000000008 /* iAgentMobileTests */,
 				A40000000000000000000008 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -92,6 +187,13 @@
 				A20000000000000000000005 /* MobileAppModel.swift */,
 				A20000000000000000000003 /* MobileCalendarService.swift */,
 				A20000000000000000000004 /* MobileMeetingRecorder.swift */,
+				D20000000000000000000001 /* LiveSpeechAnalyzerAdapter.swift */,
+				C20000000000000000000001 /* MeetingSummaryModel.swift */,
+				E20000000000000000000001 /* AskIAgentModel.swift */,
+				E20000000000000000000004 /* AskIAgentV2Harness.swift */,
+				E20000000000000000000003 /* AskIAgentHistoryModel.swift */,
+				F20000000000000000000001 /* AskIAgentRemoteTokenProvider.swift */,
+				7A2000000000000000000001 /* PriorityLiveActivityController.swift */,
 			);
 			path = Model;
 			sourceTree = "<group>";
@@ -100,11 +202,19 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000006 /* MobileRootView.swift */,
+				9A2000000000000000000001 /* VoiceEdgeEffectView.swift */,
+				9A2000000000000000000002 /* VoiceEdgeEffect.metal */,
+				B20000000000000000000001 /* MobileWelcomeView.swift */,
 				A20000000000000000000007 /* TodayView.swift */,
 				A20000000000000000000008 /* CodexMobileView.swift */,
+				D52000000000000000000001 /* MessagesMobileView.swift */,
 				A20000000000000000000009 /* NotesMobileView.swift */,
 				A2000000000000000000000A /* TodosMobileView.swift */,
+				A20000000000000000000011 /* TodoCreationView.swift */,
 				A2000000000000000000000B /* MeetingRecorderView.swift */,
+				E20000000000000000000002 /* AskIAgentView.swift */,
+				865300000000000000000007 /* WidgetNavigationViews.swift */,
+				B30000000000000000000004 /* MobileSettingsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -112,8 +222,11 @@
 		A40000000000000000000007 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				A2000000000000000000000F /* Assets.xcassets */,
+				B20000000000000000000002 /* AppIcon.png */,
 				A2000000000000000000000C /* Info.plist */,
 				A2000000000000000000000D /* iAgentMobile.entitlements */,
+				A20000000000000000000010 /* iAgentMobileRelease.entitlements */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -122,8 +235,28 @@
 			isa = PBXGroup;
 			children = (
 				A2000000000000000000000E /* iAgent.app */,
+				86530000000000000000000B /* iAgentWidgets.appex */,
+				B30000000000000000000006 /* iAgentMobileTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		86530000000000000000000D /* iAgentWidgets */ = {
+			isa = PBXGroup;
+			children = (
+				865300000000000000000008 /* iAgentWidgets.swift */,
+				865300000000000000000009 /* Info.plist */,
+				86530000000000000000000A /* iAgentWidgets.entitlements */,
+			);
+			path = iAgentWidgets;
+			sourceTree = "<group>";
+		};
+		B30000000000000000000008 /* iAgentMobileTests */ = {
+			isa = PBXGroup;
+			children = (
+				B30000000000000000000005 /* MobileSettingsPresentationTests.swift */,
+			);
+			path = iAgentMobileTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -136,18 +269,61 @@
 				A30000000000000000000002 /* Sources */,
 				A30000000000000000000001 /* Frameworks */,
 				A30000000000000000000003 /* Resources */,
+				865300000000000000000006 /* Embed App Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				865300000000000000000011 /* PBXTargetDependency */,
+			);
+			name = iAgentMobile;
+			packageProductDependencies = (
+				A90000000000000000000002 /* iAgentCore */,
+				AC7100000000000000000002 /* iAgentActions */,
+			);
+			productName = iAgent;
+			productReference = A2000000000000000000000E /* iAgent.app */;
+			productType = "com.apple.product-type.application";
+		};
+		86530000000000000000000E /* iAgentWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 865300000000000000000014 /* Build configuration list for PBXNativeTarget "iAgentWidgets" */;
+			buildPhases = (
+				865300000000000000000010 /* Sources */,
+				86530000000000000000000C /* Frameworks */,
+				86530000000000000000000F /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
-			name = iAgentMobile;
+			name = iAgentWidgets;
+			packageProductDependencies = (
+				865300000000000000000015 /* iAgentCore */,
+			);
+			productName = iAgentWidgets;
+			productReference = 86530000000000000000000B /* iAgentWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		B30000000000000000000009 /* iAgentMobileTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B3000000000000000000000E /* Build configuration list for PBXNativeTarget "iAgentMobileTests" */;
+			buildPhases = (
+				B3000000000000000000000A /* Sources */,
+				B30000000000000000000007 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B3000000000000000000000B /* PBXTargetDependency */,
+			);
+			name = iAgentMobileTests;
 			packageProductDependencies = (
 				A90000000000000000000002 /* iAgentCore */,
 			);
-			productName = iAgent;
-			productReference = A2000000000000000000000E /* iAgent.app */;
-			productType = "com.apple.product-type.application";
+			productName = iAgentMobileTests;
+			productReference = B30000000000000000000006 /* iAgentMobileTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -163,9 +339,32 @@
 						CreatedOnToolsVersion = 26.3;
 						ProvisioningStyle = Automatic;
 						SystemCapabilities = {
-							com.apple.BackgroundModes = { enabled = 1; };
-							com.apple.iCloud = { enabled = 1; };
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
+							com.apple.BackgroundModes = {
+								enabled = 1;
+							};
+							com.apple.Push = {
+								enabled = 1;
+							};
+							com.apple.iCloud = {
+								enabled = 1;
+							};
 						};
+					};
+					86530000000000000000000E = {
+						CreatedOnToolsVersion = 26.3;
+						ProvisioningStyle = Automatic;
+						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
+						};
+					};
+					B30000000000000000000009 = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = A50000000000000000000001;
 					};
 				};
 			};
@@ -187,12 +386,23 @@
 			projectRoot = "";
 			targets = (
 				A50000000000000000000001 /* iAgentMobile */,
+				86530000000000000000000E /* iAgentWidgets */,
+				B30000000000000000000009 /* iAgentMobileTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A30000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000000000000000000000D /* Assets.xcassets in Resources */,
+				B10000000000000000000002 /* AppIcon.png in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		86530000000000000000000F /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -208,19 +418,63 @@
 			files = (
 				A10000000000000000000001 /* iAgentMobileApp.swift in Sources */,
 				A10000000000000000000002 /* PanelTheme.swift in Sources */,
+				B10000000000000000000001 /* MobileWelcomeView.swift in Sources */,
 				A10000000000000000000003 /* MobileCalendarService.swift in Sources */,
 				A10000000000000000000004 /* MobileMeetingRecorder.swift in Sources */,
+				D10000000000000000000001 /* LiveSpeechAnalyzerAdapter.swift in Sources */,
 				A10000000000000000000005 /* MobileAppModel.swift in Sources */,
 				A10000000000000000000006 /* MobileRootView.swift in Sources */,
 				A10000000000000000000007 /* TodayView.swift in Sources */,
 				A10000000000000000000008 /* CodexMobileView.swift in Sources */,
+				D51000000000000000000001 /* MessagesMobileView.swift in Sources */,
 				A10000000000000000000009 /* NotesMobileView.swift in Sources */,
 				A1000000000000000000000A /* TodosMobileView.swift in Sources */,
+				A1000000000000000000000E /* TodoCreationView.swift in Sources */,
 				A1000000000000000000000B /* MeetingRecorderView.swift in Sources */,
+				C10000000000000000000001 /* MeetingSummaryModel.swift in Sources */,
+				E10000000000000000000001 /* AskIAgentModel.swift in Sources */,
+				E10000000000000000000004 /* AskIAgentV2Harness.swift in Sources */,
+				E10000000000000000000002 /* AskIAgentView.swift in Sources */,
+				E10000000000000000000003 /* AskIAgentHistoryModel.swift in Sources */,
+				F10000000000000000000001 /* AskIAgentRemoteTokenProvider.swift in Sources */,
+				7A1000000000000000000001 /* PriorityLiveActivityController.swift in Sources */,
+				865300000000000000000001 /* WidgetNavigationViews.swift in Sources */,
+				9A1000000000000000000001 /* VoiceEdgeEffectView.swift in Sources */,
+				9A1000000000000000000002 /* VoiceEdgeEffect.metal in Sources */,
+				B30000000000000000000001 /* MobileSettingsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		865300000000000000000010 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				865300000000000000000002 /* iAgentWidgets.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B3000000000000000000000A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B30000000000000000000002 /* MobileSettingsPresentationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		865300000000000000000011 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 86530000000000000000000E /* iAgentWidgets */;
+			targetProxy = 865300000000000000000005 /* PBXContainerItemProxy */;
+		};
+		B3000000000000000000000B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A50000000000000000000001 /* iAgentMobile */;
+			targetProxy = B30000000000000000000003 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A80000000000000000000001 /* Debug */ = {
@@ -258,13 +512,15 @@
 		A80000000000000000000003 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = iAgentMobile/Resources/iAgentMobile.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 31;
 				DEVELOPMENT_ASSET_PATHS = "";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 625CGY297X;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
+				IAGENT_OPENAI_RELAY_URL = "http://127.0.0.1:8787/ask";
 				INFOPLIST_FILE = iAgentMobile/Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 0.1;
@@ -283,11 +539,13 @@
 		A80000000000000000000004 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = iAgentMobile/Resources/iAgentMobile.entitlements;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = iAgentMobile/Resources/iAgentMobileRelease.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				CURRENT_PROJECT_VERSION = 31;
+				DEVELOPMENT_TEAM = 625CGY297X;
 				GENERATE_INFOPLIST_FILE = NO;
+				IAGENT_OPENAI_RELAY_URL = "https://iagent-ask-iagent-relay.iagent-ask-iagent-relay-worker.workers.dev/v1/ask";
 				INFOPLIST_FILE = iAgentMobile/Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 0.1;
@@ -301,6 +559,92 @@
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = 1;
 				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		865300000000000000000012 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = iAgentWidgets/iAgentWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 31;
+				DEVELOPMENT_TEAM = 625CGY297X;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iAgentWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.platon.iagent.mobile.widgets;
+				PRODUCT_NAME = iAgentWidgets;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		865300000000000000000013 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = iAgentWidgets/iAgentWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 31;
+				DEVELOPMENT_TEAM = 625CGY297X;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iAgentWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.platon.iagent.mobile.widgets;
+				PRODUCT_NAME = iAgentWidgets;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		B3000000000000000000000C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.platon.iagent.mobile.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/iAgent.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/iAgent";
+			};
+			name = Debug;
+		};
+		B3000000000000000000000D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.platon.iagent.mobile.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/iAgent.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/iAgent";
 			};
 			name = Release;
 		};
@@ -325,6 +669,24 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		865300000000000000000014 /* Build configuration list for PBXNativeTarget "iAgentWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				865300000000000000000012 /* Debug */,
+				865300000000000000000013 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B3000000000000000000000E /* Build configuration list for PBXNativeTarget "iAgentMobileTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B3000000000000000000000C /* Debug */,
+				B3000000000000000000000D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -339,6 +701,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A90000000000000000000001 /* XCLocalSwiftPackageReference ".." */;
 			productName = iAgentCore;
+		};
+		865300000000000000000015 /* iAgentCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A90000000000000000000001 /* XCLocalSwiftPackageReference ".." */;
+			productName = iAgentCore;
+		};
+		AC7100000000000000000002 /* iAgentActions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A90000000000000000000001 /* XCLocalSwiftPackageReference ".." */;
+			productName = iAgentActions;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
