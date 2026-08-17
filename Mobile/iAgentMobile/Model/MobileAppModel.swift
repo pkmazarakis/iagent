@@ -204,7 +204,11 @@ final class MobileAppModel: ObservableObject {
     }
     #endif
 
-    let storeIdentifier = fixtureMode ? "iAgentMobileFixtures" : "iAgentMobile"
+    // Build 31 could encounter an unreadable legacy replica at the original path after an
+    // update. The store correctly refuses to overwrite data it cannot preserve, but that
+    // must not turn into a permanent local-write outage. A new app-private generation gets
+    // a fresh CloudKit token and performs a complete private-zone fetch on first launch.
+    let storeIdentifier = fixtureMode ? "iAgentMobileFixtures" : "iAgentMobile-v2"
     let storeURL = IAgentLocalSyncStore.defaultFileURL(appIdentifier: storeIdentifier)
     localStore = IAgentLocalSyncStore(fileURL: storeURL)
     let actionSourceDeviceID: String
