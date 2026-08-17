@@ -1,0 +1,21 @@
+{
+  "name": "@iagent/ask-iagent-relay-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/auth.mjs && node --check src/attestation.mjs && node --check src/attestation-state.mjs && node --check src/config.mjs && node --check src/contract.mjs && node --check src/limiter.mjs && node --check src/worker.mjs",
+    "dev": "wrangler dev --local",
+    "test": "node --test test/*.test.mjs",
+    "token:local": "node scripts/mint-local-token.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "jose": "^6.2.8",
+    "node-app-attest": "^1.0.1"
+  }
+}

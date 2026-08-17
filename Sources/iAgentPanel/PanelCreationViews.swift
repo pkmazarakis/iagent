@@ -51,8 +51,11 @@ struct InlineDictationThreadRow: View {
                 reservedWidth: 54
             )
         }
-        .padding(.leading, isProjectChild ? 50 : 20)
-        .padding(.trailing, 20)
+        .padding(
+            .leading,
+            isProjectChild ? 50 : PanelPageLayout.contentInset
+        )
+        .padding(.trailing, PanelPageLayout.contentInset)
         .frame(height: 36)
         .background(Color.agentBlue.opacity(0.085))
         .overlay(alignment: .leading) {
@@ -234,7 +237,7 @@ struct CreationMenuView: View {
 
                         creationIcon(for: option)
                     }
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, PanelPageLayout.contentInset)
                     .frame(height: 44)
                     .contentShape(Rectangle())
                     .background(
@@ -301,7 +304,7 @@ struct FocusSessionView: View {
                         controller.toggleFocusSession()
                     }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, PanelPageLayout.contentInset)
             .frame(height: 42)
             .overlay(alignment: .bottom) {
                 Rectangle().fill(.white.opacity(0.065)).frame(height: 1)
@@ -381,7 +384,7 @@ struct FocusSessionView: View {
                 .buttonStyle(.plain)
                 .help("Reset focus session")
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, PanelPageLayout.contentInset)
             .frame(height: 100)
         }
     }
@@ -400,6 +403,22 @@ struct LocalDocumentEditorView: View {
     }
 
     var body: some View {
+        Group {
+            if controller.isShowingMeetingNote {
+                MeetingNoteEditorView(controller: controller)
+            } else {
+                standardEditor
+            }
+        }
+        .onChange(of: controller.editorTitle) { _, _ in
+            controller.noteDraftDidChange()
+        }
+        .onChange(of: controller.editorBody) { _, _ in
+            controller.noteDraftDidChange()
+        }
+    }
+
+    private var standardEditor: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: kind == .note ? "note.text" : "doc.text")
@@ -433,7 +452,7 @@ struct LocalDocumentEditorView: View {
                     }
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, PanelPageLayout.contentInset)
             .frame(height: 42)
             .overlay(alignment: .bottom) {
                 Rectangle().fill(.white.opacity(0.065)).frame(height: 1)
@@ -456,12 +475,6 @@ struct LocalDocumentEditorView: View {
             if !showingVoiceCapture {
                 controller.requestNoteEditorFocus()
             }
-        }
-        .onChange(of: controller.editorTitle) { _, _ in
-            controller.noteDraftDidChange()
-        }
-        .onChange(of: controller.editorBody) { _, _ in
-            controller.noteDraftDidChange()
         }
     }
 
@@ -521,7 +534,7 @@ struct LocalDocumentEditorView: View {
                     .lineLimit(2)
             }
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, PanelPageLayout.contentInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.top, 20)
     }
@@ -572,6 +585,789 @@ struct LocalDocumentEditorView: View {
         .frame(height: 40)
         .overlay(alignment: .top) {
             Rectangle().fill(.white.opacity(0.065)).frame(height: 1)
+        }
+    }
+}
+
+enum MeetingNoteTab: String, CaseIterable, Identifiable {
+    case summary = "Summary"
+    case transcript = "Transcript"
+
+    var id: String { rawValue }
+}
+
+private enum MeetingSummaryBlockKind: Equatable {
+    case heading
+    case bullet
+    case paragraph
+}
+
+private struct MeetingSummaryBlock: Identifiable, Equatable {
+    let id: Int
+    let kind: MeetingSummaryBlockKind
+    let text: String
+
+    static func parse(_ markdown: String) -> [MeetingSummaryBlock] {
+        markdown
+            .components(separatedBy: .newlines)
+            .compactMap { rawLine -> (MeetingSummaryBlockKind, String)? in
+                let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !line.isEmpty,
+                      line != MeetingNoteCodec.pendingSummary
+                else { return nil }
+                if line.hasPrefix("## ") {
+                    return (.heading, String(line.dropFirst(3)))
+                }
+                if line.hasPrefix("- ") {
+                    return (.bullet, String(line.dropFirst(2)))
+                }
+                return (.paragraph, line)
+            }
+            .enumerated()
+            .map { index, value in
+                MeetingSummaryBlock(id: index, kind: value.0, text: value.1)
+            }
+    }
+}
+
+struct MeetingNoteEditorView: View {
+    @ObservedObject var controller: PanelController
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var revealedBlockCount = 0
+    @State private var summaryIntroPhase = 0
+    @State private var editingSummary = false
+
+    private var document: MeetingNoteDocument? {
+        controller.meetingNoteDocument
+    }
+
+    private var summaryBlocks: [MeetingSummaryBlock] {
+        MeetingSummaryBlock.parse(document?.summaryMarkdown ?? "")
+    }
+
+    private var selectedTab: MeetingNoteTab {
+        controller.selectedMeetingNoteTab
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            meetingHeader
+            tabBar
+
+            if selectedTab == .summary,
+               controller.meetingSummaryState == .ready,
+               editingSummary,
+               controller.noteFindVisible
+            {
+                MarkdownNoteFindBar(isPresented: $controller.noteFindVisible)
+            }
+
+            Group {
+                switch selectedTab {
+                case .summary:
+                    summaryContent
+                case .transcript:
+                    transcriptContent
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            footer
+        }
+        .task(id: controller.meetingSummaryAnimationRevision) {
+            await runSummaryAnimation()
+        }
+        .task(id: controller.lastSavedDocument?.id) {
+            await runSummaryIntro()
+        }
+        .onChange(of: controller.selectedMeetingNoteTab) { _, tab in
+            if tab != .summary {
+                editingSummary = false
+            }
+        }
+    }
+
+    private var meetingHeader: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "waveform.and.mic")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.agentGreen.opacity(0.9))
+
+                TextField("Untitled meeting", text: $controller.editorTitle)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .layoutPriority(1)
+                    .accessibilityIdentifier("meeting-note-title")
+
+                NoteSaveIndicator(state: controller.noteSaveState)
+
+                if let duration = document?.metadata.duration, !duration.isEmpty {
+                    Text(duration)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+            }
+            .frame(height: 34)
+
+            HStack(spacing: 12) {
+                metadataItem(
+                    icon: "calendar",
+                    text: document?.metadata.date ?? ""
+                )
+                metadataItem(
+                    icon: "clock",
+                    text: document?.metadata.time ?? ""
+                )
+
+                Spacer(minLength: 8)
+
+                if let calendar = document?.metadata.calendar, !calendar.isEmpty {
+                    Text(calendar)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.46))
+                        .padding(.horizontal, 7)
+                        .frame(height: 18)
+                        .background(.white.opacity(0.055), in: Capsule())
+                }
+            }
+            .frame(height: 25)
+        }
+        .padding(.horizontal, PanelPageLayout.contentInset)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(.white.opacity(0.055)).frame(height: 1)
+        }
+    }
+
+    private func metadataItem(icon: String, text: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .medium))
+            Text(text)
+                .font(.system(size: 9, weight: .regular))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.white.opacity(0.42))
+        .accessibilityElement(children: .combine)
+    }
+
+    private var tabBar: some View {
+        HStack(spacing: 22) {
+            ForEach(MeetingNoteTab.allCases) { tab in
+                Button {
+                    controller.selectedMeetingNoteTab = tab
+                } label: {
+                    Text(tab.rawValue)
+                        .font(.system(size: 11, weight: selectedTab == tab ? .semibold : .medium))
+                        .foregroundStyle(
+                            .white.opacity(selectedTab == tab ? 0.88 : 0.4)
+                        )
+                        .frame(height: 31)
+                        .overlay(alignment: .bottom) {
+                            Rectangle()
+                                .fill(selectedTab == tab ? Color.white.opacity(0.86) : .clear)
+                                .frame(height: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("meeting-note-tab-\(tab.rawValue.lowercased())")
+            }
+
+            Spacer()
+
+            if selectedTab == .summary, editingSummary {
+                Button("Done") {
+                    editingSummary = false
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Color.agentGreen.opacity(0.8))
+                .help("Finish editing summary")
+            } else if selectedTab == .transcript {
+                sourceLegend(source: .microphone)
+                sourceLegend(source: .meeting)
+            }
+        }
+        .padding(.horizontal, PanelPageLayout.contentInset)
+        .frame(height: 32)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(.white.opacity(0.065)).frame(height: 1)
+        }
+    }
+
+    private func sourceLegend(source: MeetingTranscriptSource) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(sourceColor(source))
+                .frame(width: 5, height: 5)
+            Text(source.displayName)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.white.opacity(0.38))
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(source.displayName), \(source.detailLabel)")
+    }
+
+    @ViewBuilder
+    private var summaryContent: some View {
+        switch controller.meetingSummaryState {
+        case .failed(let message):
+            meetingEmptyState(
+                icon: "exclamationmark.triangle",
+                title: "Couldn’t summarize this meeting",
+                detail: message
+            )
+        case .ready:
+            if editingSummary {
+                summaryEditor
+            } else {
+                completedSummary
+            }
+        case .idle:
+            if document?.summaryMarkdown == MeetingNoteCodec.pendingSummary {
+                meetingEmptyState(
+                    icon: "text.badge.xmark",
+                    title: "Summary isn’t available",
+                    detail: "The transcript is preserved in the Transcript tab."
+                )
+            } else {
+                completedSummary
+            }
+        case .generating:
+            animatedSummary
+        }
+    }
+
+    private var summaryEditor: some View {
+        MarkdownNoteEditor(
+            text: Binding(
+                get: { controller.meetingSummaryMarkdown },
+                set: { controller.updateMeetingSummary($0) }
+            ),
+            documentID: "\(controller.noteEditorDocumentID)-summary",
+            rawSourceMode: controller.noteShowsRawMarkdown,
+            placeholder: "Add meeting notes"
+        )
+        .padding(.horizontal, 18)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("meeting-note-summary-editor")
+    }
+
+    private var completedSummary: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 9) {
+                ForEach(summaryBlocks) { block in
+                    StaticMeetingSummaryBlock(block: block)
+                }
+            }
+            .padding(.horizontal, PanelPageLayout.contentInset)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollIndicators(.hidden)
+        .textSelection(.enabled)
+        .accessibilityIdentifier("meeting-note-summary")
+    }
+
+    private var animatedSummary: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                ZStack(alignment: .topLeading) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(document?.transcriptSegments.map(\.text).joined(separator: " ") ?? "")
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(.white.opacity(0.58))
+                            .lineSpacing(4)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        EnhancingNotesPill(
+                            reduceMotion: reduceMotion,
+                            isTranscribing: true
+                        )
+                        .id("meeting-transcribing-tail")
+                    }
+                    .opacity(summaryIntroPhase == 0 ? 1 : 0)
+                    .allowsHitTesting(summaryIntroPhase == 0)
+
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(summaryBlocks.prefix(revealedBlockCount))) { block in
+                            SpectralSummaryBlock(
+                                block: block,
+                                isRevealed: true,
+                                reduceMotion: reduceMotion
+                            )
+                        }
+
+                        EnhancingNotesPill(
+                            reduceMotion: reduceMotion,
+                            isTranscribing: false
+                        )
+                        .id("meeting-summary-tail")
+                        .padding(.top, revealedBlockCount == 0 ? 20 : 4)
+                    }
+                    .opacity(summaryIntroPhase == 0 ? 0 : 1)
+                    .allowsHitTesting(summaryIntroPhase > 0)
+                }
+                .padding(.horizontal, PanelPageLayout.contentInset)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.hidden)
+            .onChange(of: revealedBlockCount) { _, _ in
+                guard summaryIntroPhase > 0 else { return }
+                if reduceMotion {
+                    proxy.scrollTo("meeting-summary-tail", anchor: .bottom)
+                } else {
+                    withAnimation(
+                        .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.19)
+                    ) {
+                        proxy.scrollTo("meeting-summary-tail", anchor: .bottom)
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Enhancing meeting notes")
+        .accessibilityAddTraits(.updatesFrequently)
+        .accessibilityIdentifier("meeting-summary-generating")
+    }
+
+    private var transcriptContent: some View {
+        Group {
+            if let segments = document?.transcriptSegments, !segments.isEmpty {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(segments) { segment in
+                            transcriptRow(segment)
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+            } else {
+                meetingEmptyState(
+                    icon: "waveform.slash",
+                    title: "No transcript available",
+                    detail: "No recognizable speech was captured."
+                )
+            }
+        }
+        .accessibilityIdentifier("meeting-note-transcript")
+    }
+
+    private func transcriptRow(_ segment: MeetingTranscriptSegment) -> some View {
+        HStack(alignment: .top, spacing: 11) {
+            ZStack {
+                Circle()
+                    .fill(sourceColor(segment.source).opacity(0.12))
+                    .frame(width: 26, height: 26)
+                Image(systemName: segment.source == .microphone ? "person.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(sourceColor(segment.source))
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(segment.source.displayName)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.74))
+                    Text(segment.source.detailLabel)
+                        .font(.system(size: 9, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.34))
+                    Spacer()
+                    Text(elapsedText(segment.startedAt))
+                        .font(.system(size: 9, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+
+                Text(segment.text)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, PanelPageLayout.contentInset)
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(.white.opacity(0.05))
+                .frame(height: 1)
+                .padding(.leading, 57)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(segment.source.displayName), \(segment.source.detailLabel), \(elapsedText(segment.startedAt)): \(segment.text)"
+        )
+        .accessibilityIdentifier("meeting-transcript-\(segment.source.rawValue)")
+    }
+
+    @ViewBuilder
+    private var footer: some View {
+        if selectedTab == .summary,
+           controller.meetingSummaryState == .ready,
+           editingSummary
+        {
+            MarkdownFormattingToolbar(
+                rawSourceMode: controller.noteShowsRawMarkdown,
+                showFind: {
+                    controller.noteFindVisible = true
+                },
+                toggleSourceMode: {
+                    controller.toggleNoteSourceMode()
+                },
+                openLibrary: {
+                    controller.openLocalLibrary()
+                }
+            )
+            .padding(.horizontal, 16)
+            .frame(height: 40)
+            .overlay(alignment: .top) {
+                Rectangle().fill(.white.opacity(0.065)).frame(height: 1)
+            }
+        } else if selectedTab == .summary,
+                  controller.meetingSummaryState == .ready
+        {
+            HStack(spacing: 14) {
+                Label("General", systemImage: "rectangle.on.rectangle")
+                Spacer()
+                Button {
+                    copyCurrentTab()
+                } label: {
+                    Label("Copy summary", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.plain)
+                .help("Copy summary")
+
+                Button {
+                    editingSummary = true
+                    controller.requestNoteEditorFocus()
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+                .buttonStyle(.plain)
+                .help("Edit summary")
+            }
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(.white.opacity(0.42))
+            .padding(.horizontal, PanelPageLayout.contentInset)
+            .frame(height: 40)
+            .overlay(alignment: .top) {
+                Rectangle().fill(.white.opacity(0.065)).frame(height: 1)
+            }
+        } else {
+            HStack(spacing: 8) {
+                if selectedTab == .summary {
+                    Image(systemName: "wand.and.stars")
+                        .foregroundStyle(Color.agentGreen.opacity(0.7))
+                    Text(
+                        summaryIntroPhase == 0
+                            ? "Transcribing the captured audio"
+                            : "Building from the local transcript"
+                    )
+                } else {
+                    Image(systemName: "lock")
+                    Text("Source labels reflect the captured audio channel")
+                }
+                Spacer()
+                Button {
+                    copyCurrentTab()
+                } label: {
+                    Label(
+                        selectedTab == .summary ? "Copy summary" : "Copy transcript",
+                        systemImage: "doc.on.doc"
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(selectedTab == .summary && summaryBlocks.isEmpty)
+                .help(selectedTab == .summary ? "Copy summary" : "Copy transcript")
+            }
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(.white.opacity(0.38))
+            .padding(.horizontal, PanelPageLayout.contentInset)
+            .frame(height: 40)
+            .overlay(alignment: .top) {
+                Rectangle().fill(.white.opacity(0.065)).frame(height: 1)
+            }
+        }
+    }
+
+    private func meetingEmptyState(icon: String, title: String, detail: String) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.white.opacity(0.28))
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.56))
+            Text(detail)
+                .font(.system(size: 10, weight: .regular))
+                .foregroundStyle(.white.opacity(0.34))
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 28)
+    }
+
+    private func runSummaryAnimation() async {
+        guard controller.meetingSummaryAnimationRevision > 0,
+              case .generating = controller.meetingSummaryState,
+              let documentID = controller.lastSavedDocument?.id
+        else { return }
+
+        if summaryIntroPhase == 0 {
+            withAnimation(.easeOut(duration: reduceMotion ? 0 : 0.1)) {
+                summaryIntroPhase = 1
+            }
+        }
+        revealedBlockCount = 0
+        let blocks = summaryBlocks
+        if reduceMotion {
+            withAnimation(.easeOut(duration: 0.12)) {
+                revealedBlockCount = blocks.count
+            }
+        } else {
+            try? await Task.sleep(for: .milliseconds(150))
+            for index in blocks.indices {
+                guard !Task.isCancelled else { return }
+                revealedBlockCount = index + 1
+                let characterCount = blocks[index].text.count
+                let revealDuration = min(0.18, max(0.11, 0.09 + Double(characterCount) * 0.002))
+                try? await Task.sleep(for: .seconds(revealDuration + 0.045))
+            }
+        }
+
+        try? await Task.sleep(for: .milliseconds(reduceMotion ? 120 : 290))
+        guard !Task.isCancelled else { return }
+        controller.finishMeetingSummaryAnimation(documentID: documentID)
+    }
+
+    private func runSummaryIntro() async {
+        guard case .generating = controller.meetingSummaryState else { return }
+        revealedBlockCount = 0
+        summaryIntroPhase = reduceMotion ? 1 : 0
+        guard !reduceMotion else { return }
+        try? await Task.sleep(for: .milliseconds(360))
+        guard !Task.isCancelled else { return }
+        withAnimation(.easeOut(duration: 0.1)) {
+            summaryIntroPhase = 1
+        }
+    }
+
+    private func copyCurrentTab() {
+        let value: String
+        switch selectedTab {
+        case .summary:
+            value = document?.summaryMarkdown ?? ""
+        case .transcript:
+            value = document?.transcriptPlainText ?? ""
+        }
+        guard !value.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+
+    private func elapsedText(_ interval: TimeInterval) -> String {
+        let seconds = max(0, Int(interval.rounded(.down)))
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private func sourceColor(_ source: MeetingTranscriptSource) -> Color {
+        switch source {
+        case .meeting: .agentBlue
+        case .microphone: .agentAmber
+        }
+    }
+}
+
+private struct SpectralSummaryBlock: View {
+    let block: MeetingSummaryBlock
+    let isRevealed: Bool
+    let reduceMotion: Bool
+    @State private var progress: CGFloat = 0
+
+    var body: some View {
+        Group {
+            if progress >= 0.999 {
+                baseContent
+                    .foregroundStyle(neutralColor)
+            } else {
+                baseContent
+                    .foregroundStyle(spectralGradient)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear {
+            updateReveal(animated: !reduceMotion)
+        }
+        .onChange(of: isRevealed) { _, _ in
+            updateReveal(animated: !reduceMotion)
+        }
+    }
+
+    @ViewBuilder
+    private var baseContent: some View {
+        switch block.kind {
+        case .heading:
+            Text(block.text)
+                .font(.system(size: 13, weight: .semibold))
+                .padding(.top, block.id == 0 ? 0 : 3)
+        case .bullet:
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "circle.fill")
+                    .font(.system(size: 4, weight: .semibold))
+                Text(block.text)
+                    .font(.system(size: 11, weight: .regular))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case .paragraph:
+            Text(block.text)
+                .font(.system(size: 11, weight: .regular))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var neutralColor: Color {
+        block.kind == .heading ? .white.opacity(0.88) : .white.opacity(0.68)
+    }
+
+    private var spectralGradient: LinearGradient {
+        let edge = min(max(progress, 0), 1)
+        let bandStart = max(0, edge - 0.2)
+        let bandLength = max(0.001, edge - bandStart)
+
+        return LinearGradient(
+            stops: [
+                .init(color: neutralColor, location: 0),
+                .init(color: neutralColor, location: bandStart),
+                .init(
+                    color: Color(red: 1, green: 0.48, blue: 0.66),
+                    location: bandStart + bandLength * 0.14
+                ),
+                .init(
+                    color: Color.agentAmber,
+                    location: bandStart + bandLength * 0.34
+                ),
+                .init(
+                    color: Color.agentGreen,
+                    location: bandStart + bandLength * 0.54
+                ),
+                .init(
+                    color: Color.agentBlue,
+                    location: bandStart + bandLength * 0.74
+                ),
+                .init(
+                    color: Color(red: 0.72, green: 0.57, blue: 1),
+                    location: max(bandStart, edge - 0.01)
+                ),
+                .init(color: .clear, location: edge),
+                .init(color: .clear, location: 1),
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    private func updateReveal(animated: Bool) {
+        let target: CGFloat = isRevealed ? 1 : 0
+        guard animated, isRevealed else {
+            progress = target
+            return
+        }
+        let duration = min(0.18, max(0.11, 0.09 + Double(block.text.count) * 0.002))
+        withAnimation(.linear(duration: duration)) {
+            progress = target
+        }
+    }
+}
+
+private struct StaticMeetingSummaryBlock: View {
+    let block: MeetingSummaryBlock
+
+    var body: some View {
+        Group {
+            switch block.kind {
+            case .heading:
+                Text(block.text)
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(.top, block.id == 0 ? 0 : 3)
+            case .bullet:
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 4, weight: .semibold))
+                    Text(block.text)
+                        .font(.system(size: 11, weight: .regular))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            case .paragraph:
+                Text(block.text)
+                    .font(.system(size: 11, weight: .regular))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .foregroundStyle(
+            block.kind == .heading ? .white.opacity(0.88) : .white.opacity(0.68)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct EnhancingNotesPill: View {
+    let reduceMotion: Bool
+    let isTranscribing: Bool
+    @State private var rotating = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if isTranscribing {
+                Image(systemName: "waveform")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.agentGreen.opacity(0.84))
+                    .symbolEffect(
+                        .variableColor.iterative,
+                        options: reduceMotion ? .default : .repeating
+                    )
+            } else if reduceMotion {
+                Circle()
+                    .trim(from: 0.08, to: 0.78)
+                    .stroke(
+                        Color.agentGreen.opacity(0.82),
+                        style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                    )
+                    .frame(width: 16, height: 16)
+            } else {
+                Circle()
+                    .trim(from: 0.08, to: 0.78)
+                    .stroke(
+                        Color.agentGreen.opacity(0.86),
+                        style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                    )
+                    .frame(width: 16, height: 16)
+                    .rotationEffect(.degrees(rotating ? 360 : 0))
+                    .animation(
+                        .linear(duration: 0.95).repeatForever(autoreverses: false),
+                        value: rotating
+                    )
+            }
+
+            Text(isTranscribing ? "Transcribing" : "Enhancing notes")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(.white.opacity(0.58))
+
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, minHeight: 40)
+        .background(.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 20))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20)
+                .stroke(.white.opacity(0.09), lineWidth: 0.7)
+        }
+        .shadow(color: .black.opacity(0.28), radius: 12, y: 5)
+        .onAppear {
+            rotating = !reduceMotion && !isTranscribing
         }
     }
 }
@@ -693,7 +1489,6 @@ struct TodoListView: View {
             }
         }
         .onAppear {
-            inputFocused = false
             controller.setTodoComposerFocused(false)
         }
         .onDisappear {
@@ -705,7 +1500,13 @@ struct TodoListView: View {
             }
         }
         .task(id: controller.todoComposerFocusRequest) {
-            guard controller.todoComposerFocusRequest > 0 else { return }
+            guard controller.todoComposerFocusRequest > 0,
+                  controller.contentMode == .todo,
+                  !controller.showingPastTodos
+            else {
+                return
+            }
+            await Task.yield()
             inputFocused = true
         }
         .task(id: inputFocused) {
@@ -779,19 +1580,6 @@ struct TodoListView: View {
                 )
 
             HStack(spacing: 0) {
-                ReferenceTodoCheckbox(
-                    fillProgress: 0,
-                    pinchProgress: 0,
-                    rightPullProgress: 0,
-                    pressScale: 1,
-                    checkProgress: 0
-                )
-                    .scaleEffect(0.64 + 0.36 * checkboxReveal)
-                    .opacity(Double(checkboxReveal))
-                    .offset(x: -4 * (1 - checkboxReveal))
-                    .frame(width: 27 * checkboxReveal, height: 18, alignment: .leading)
-                    .clipped()
-
                 TextField("Create new task", text: $controller.todoDraft)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12, weight: .regular))
@@ -892,10 +1680,6 @@ struct TodoListView: View {
         .frame(height: TodoLayoutMetrics.composerHeight, alignment: .top)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(inputFocused ? "New todo editor" : "Create new task")
-    }
-
-    private var checkboxReveal: CGFloat {
-        phase(composerFocusProgress, from: 0.38, to: 1)
     }
 
     private var shortcutFadeProgress: CGFloat {
@@ -1346,7 +2130,7 @@ private struct TodoRow: View {
                 .help("Delete todo")
             }
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, PanelPageLayout.contentInset)
         .frame(height: 36)
         .background(.white.opacity(hovering ? 0.035 : 0))
         .contentShape(Rectangle())
@@ -1858,7 +2642,7 @@ struct NewCodexThreadView: View {
                 .buttonStyle(PrimaryEditorButtonStyle(color: .agentGreen))
                 .help("Start Codex task")
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, PanelPageLayout.contentInset)
             .frame(height: 44)
             .overlay(alignment: .top) {
                 Rectangle().fill(.white.opacity(0.065)).frame(height: 1)
@@ -1870,6 +2654,7 @@ struct NewCodexThreadView: View {
 
 struct HeaderIconButtonStyle: ButtonStyle {
     let isActive: Bool
+    var size: CGFloat = 28
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -1879,7 +2664,7 @@ struct HeaderIconButtonStyle: ButtonStyle {
                     ? Color.agentGreen
                     : Color.white.opacity(configuration.isPressed ? 0.52 : 0.76)
             )
-            .frame(width: 28, height: 28)
+            .frame(width: size, height: size)
             .background(.white.opacity(isActive ? 0.07 : 0), in: RoundedRectangle(cornerRadius: 6))
             .contentShape(Rectangle())
     }

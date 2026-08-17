@@ -1,0 +1,9 @@
+# Copy to .dev.vars for local Wrangler use. Never commit .dev.vars.
+# Replace every blank value locally; do not paste these values into chat.
+OPENAI_API_KEY=
+ANONYMOUS_TOKEN_HMAC_KEY=
+SAFETY_IDENTIFIER_HMAC_KEY=
+# Required only when DEVICECHECK_FALLBACK_ENABLED=true. Keep the .p8 material on one line with
+# escaped newlines or use Wrangler's interactive secret prompt in production.
+APPLE_DEVICECHECK_KEY_ID=
+APPLE_DEVICECHECK_PRIVATE_KEY=

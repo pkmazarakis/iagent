@@ -70,7 +70,47 @@ struct SpeechTranscriptAccumulator: Sendable, Equatable {
     let trailing = trailing.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !leading.isEmpty else { return trailing }
     guard !trailing.isEmpty else { return leading }
+
+    let leadingWords = normalizedWords(leading)
+    let trailingWords = normalizedWords(trailing)
+    let maximumOverlap = min(leadingWords.count, trailingWords.count)
+    if maximumOverlap >= 2 {
+      for overlap in stride(from: maximumOverlap, through: 2, by: -1)
+      where Array(leadingWords.suffix(overlap)) == Array(trailingWords.prefix(overlap)) {
+        let remainder = droppingFirstWords(overlap, from: trailing)
+        guard !remainder.isEmpty else { return leading }
+        if remainder.first?.isWhitespace == true || remainder.first?.isPunctuation == true {
+          return leading + remainder
+        }
+        return "\(leading) \(remainder)"
+      }
+    }
+
     return "\(leading) \(trailing)"
+  }
+
+  private static func droppingFirstWords(_ count: Int, from value: String) -> String {
+    guard count > 0 else { return value }
+    var wordsSeen = 0
+    var insideWord = false
+
+    for index in value.indices {
+      let character = value[index]
+      let isWordCharacter = character.isLetter || character.isNumber
+      if isWordCharacter {
+        if !insideWord {
+          wordsSeen += 1
+          insideWord = true
+        }
+      } else if insideWord {
+        if wordsSeen == count {
+          return String(value[index...])
+        }
+        insideWord = false
+      }
+    }
+
+    return wordsSeen <= count ? "" : value
   }
 
   private static func normalizedWords(_ value: String) -> [String] {
@@ -92,6 +132,173 @@ struct SpeechTranscriptAccumulator: Sendable, Equatable {
     let sharedPrefix = zip(candidate, previous).prefix { $0 == $1 }.count
     let revisionThreshold = min(2, previous.count)
     return sharedPrefix >= revisionThreshold
+  }
+}
+
+enum SmartDictationFormatter {
+  private enum ListMode {
+    case none
+    case ordered(next: Int)
+    case unordered
+  }
+
+  private static let commandPattern = #"(?i)\b(new paragraph|new line|newline|numbered list|number list|ordered list|bullet list|bulleted list|bullet point|new bullet|next item|new item|end list|question mark|exclamation mark|exclamation point|full stop|open parenthesis|close parenthesis|open quote|close quote|em dash|hyphen|semicolon|colon|comma|period|dash)\b"#
+
+  static func format(_ transcript: String) -> String {
+    guard !transcript.isEmpty,
+          let expression = try? NSRegularExpression(pattern: commandPattern)
+    else {
+      return transcript
+    }
+
+    let source = transcript as NSString
+    let matches = expression.matches(
+      in: transcript,
+      range: NSRange(location: 0, length: source.length)
+    )
+    guard !matches.isEmpty else { return transcript }
+
+    var output = ""
+    var cursor = 0
+    var listMode = ListMode.none
+
+    for match in matches {
+      guard match.range.location >= cursor else { continue }
+      output += source.substring(with: NSRange(
+        location: cursor,
+        length: match.range.location - cursor
+      ))
+
+      let command = source.substring(with: match.range)
+        .lowercased()
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      var matchEnd = NSMaxRange(match.range)
+      if matchEnd < source.length {
+        let nextCharacter = source.substring(with: NSRange(location: matchEnd, length: 1))
+        if nextCharacter == "." || nextCharacter == "," {
+          matchEnd += 1
+        }
+      }
+
+      switch command {
+      case "new paragraph":
+        trimTrailingHorizontalWhitespace(in: &output)
+        ensureParagraphBreak(in: &output)
+        listMode = .none
+      case "new line", "newline":
+        trimTrailingHorizontalWhitespace(in: &output)
+        ensureLineBreak(in: &output)
+      case "numbered list", "number list", "ordered list":
+        trimTrailingHorizontalWhitespace(in: &output)
+        ensureLineBreak(in: &output)
+        output += "1. "
+        listMode = .ordered(next: 2)
+      case "bullet list", "bulleted list", "bullet point", "new bullet", "dash":
+        trimTrailingHorizontalWhitespace(in: &output)
+        ensureLineBreak(in: &output)
+        output += "- "
+        listMode = .unordered
+      case "next item", "new item":
+        trimTrailingHorizontalWhitespace(in: &output)
+        ensureLineBreak(in: &output)
+        switch listMode {
+        case .ordered(let number):
+          output += "\(number). "
+          listMode = .ordered(next: number + 1)
+        case .unordered:
+          output += "- "
+        case .none:
+          output += "- "
+          listMode = .unordered
+        }
+      case "end list":
+        trimTrailingHorizontalWhitespace(in: &output)
+        ensureParagraphBreak(in: &output)
+        listMode = .none
+      case "comma": appendPunctuation(",", to: &output)
+      case "period", "full stop": appendPunctuation(".", to: &output)
+      case "question mark": appendPunctuation("?", to: &output)
+      case "exclamation mark", "exclamation point": appendPunctuation("!", to: &output)
+      case "colon": appendPunctuation(":", to: &output)
+      case "semicolon": appendPunctuation(";", to: &output)
+      case "open parenthesis":
+        trimTrailingHorizontalWhitespace(in: &output)
+        if !output.isEmpty, output.last?.isWhitespace == false { output += " " }
+        output += "("
+      case "close parenthesis":
+        trimTrailingHorizontalWhitespace(in: &output)
+        output += ")"
+      case "open quote":
+        trimTrailingHorizontalWhitespace(in: &output)
+        if !output.isEmpty, output.last?.isWhitespace == false { output += " " }
+        output += "“"
+      case "close quote":
+        trimTrailingHorizontalWhitespace(in: &output)
+        output += "”"
+      case "em dash":
+        trimTrailingHorizontalWhitespace(in: &output)
+        output += " —"
+      case "hyphen":
+        trimTrailingHorizontalWhitespace(in: &output)
+        output += "-"
+      default:
+        output += source.substring(with: match.range)
+      }
+
+      cursor = matchEnd
+    }
+
+    if cursor < source.length {
+      output += source.substring(from: cursor)
+    }
+    return normalized(output)
+  }
+
+  private static func appendPunctuation(_ punctuation: Character, to output: inout String) {
+    trimTrailingHorizontalWhitespace(in: &output)
+    if output.last != punctuation {
+      output.append(punctuation)
+    }
+  }
+
+  private static func trimTrailingHorizontalWhitespace(in output: inout String) {
+    while output.last == " " || output.last == "\t" {
+      output.removeLast()
+    }
+  }
+
+  private static func ensureLineBreak(in output: inout String) {
+    guard !output.isEmpty, !output.hasSuffix("\n") else { return }
+    output += "\n"
+  }
+
+  private static func ensureParagraphBreak(in output: inout String) {
+    guard !output.isEmpty else { return }
+    trimTrailingHorizontalWhitespace(in: &output)
+    while output.hasSuffix("\n\n\n") {
+      output.removeLast()
+    }
+    if output.hasSuffix("\n\n") { return }
+    output += output.hasSuffix("\n") ? "\n" : "\n\n"
+  }
+
+  private static func normalized(_ value: String) -> String {
+    var result = value
+    let replacements = [
+      (#"[ \t]+"#, " "),
+      (#" *\n *"#, "\n"),
+      (#"\n{3,}"#, "\n\n"),
+      (#" +([,.;:!?\)])"#, "$1"),
+      (#"([\(“]) +"#, "$1"),
+    ]
+    for (pattern, replacement) in replacements {
+      result = result.replacingOccurrences(
+        of: pattern,
+        with: replacement,
+        options: .regularExpression
+      )
+    }
+    return result.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 }
 
@@ -295,7 +502,7 @@ final class SpeechDictationService: NSObject, ObservableObject {
 
   @discardableResult
   func stop() -> String {
-    transcript = accumulator.finalizeSegment()
+    transcript = SmartDictationFormatter.format(accumulator.finalizeSegment())
     finishCapture(cancelRecognition: false)
     return transcript.trimmingCharacters(in: .whitespacesAndNewlines)
   }
@@ -318,7 +525,7 @@ final class SpeechDictationService: NSObject, ObservableObject {
     isSpeechActive = speechActive
     lastSpeechActivityAt = speechActive ? Date() : nil
     accumulator.update(with: transcript)
-    self.transcript = accumulator.text
+    self.transcript = SmartDictationFormatter.format(accumulator.text)
     self.elapsed = elapsed
     levels = [
       0.18, 0.46, 0.72, 0.34, 0.84, 0.58, 0.27, 0.66, 0.92, 0.48, 0.74,
@@ -353,6 +560,7 @@ final class SpeechDictationService: NSObject, ObservableObject {
     let request = SFSpeechAudioBufferRecognitionRequest()
     request.shouldReportPartialResults = true
     request.taskHint = .dictation
+    request.addsPunctuation = true
     if recognizer.supportsOnDeviceRecognition {
       request.requiresOnDeviceRecognition = true
     }
@@ -395,7 +603,7 @@ final class SpeechDictationService: NSObject, ObservableObject {
 
   private func scheduleRecognitionRestart() {
     guard isRecording, !isPreview else { return }
-    transcript = accumulator.finalizeSegment()
+    transcript = SmartDictationFormatter.format(accumulator.finalizeSegment())
     restartTask?.cancel()
     invalidateRecognitionCycle(cancel: false)
 
@@ -499,12 +707,12 @@ final class SpeechDictationService: NSObject, ObservableObject {
     guard generation == recognitionGeneration, isRecording, !isPreview else { return }
 
     if let candidate, !candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      transcript = accumulator.update(with: candidate)
+      transcript = SmartDictationFormatter.format(accumulator.update(with: candidate))
       consecutiveRecognitionFailures = 0
     }
 
     if isFinal {
-      transcript = accumulator.finalizeSegment()
+      transcript = SmartDictationFormatter.format(accumulator.finalizeSegment())
       scheduleRecognitionRestart()
       return
     }

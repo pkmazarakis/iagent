@@ -13,7 +13,9 @@ let package = Package(
   ],
   products: [
     .executable(name: "iAgentPanel", targets: ["iAgentPanel"]),
-    .library(name: "iAgentCore", targets: ["iAgentCore"])
+    .library(name: "iAgentCore", targets: ["iAgentCore"]),
+    .library(name: "iAgentActionContracts", targets: ["iAgentActionContracts"]),
+    .library(name: "iAgentActions", targets: ["iAgentActions"])
   ],
   dependencies: [
     .package(path: "Vendor/swift-markdown-engine")
@@ -25,13 +27,26 @@ let package = Package(
         .linkedFramework("CloudKit")
       ]
     ),
+    .target(
+      name: "iAgentActionContracts"
+    ),
+    .target(
+      name: "iAgentActions",
+      dependencies: ["iAgentActionContracts", "iAgentCore"]
+    ),
     .executableTarget(
       name: "iAgentPanel",
       dependencies: [
         "iAgentCore",
         .product(name: "MarkdownEngine", package: "swift-markdown-engine")
       ],
-      exclude: ["Info.plist", "iAgentPanel.entitlements"],
+      exclude: [
+        "Info.plist",
+        "iAgentPanel.entitlements",
+        "iAgentPanelRelease.entitlements",
+        "iAgentPanelTestFlight.entitlements",
+        "Resources/iAgentPanel.icns",
+      ],
       resources: [
         .copy("Resources/Brand"),
         .copy("Resources/CalendarDays"),
@@ -40,6 +55,7 @@ let package = Package(
         .linkedFramework("AVFoundation"),
         .linkedFramework("ApplicationServices"),
         .linkedFramework("Carbon"),
+        .linkedFramework("Contacts"),
         .linkedFramework("EventKit"),
         .linkedFramework("ScreenCaptureKit"),
         .linkedFramework("Speech"),
@@ -54,7 +70,12 @@ let package = Package(
     ),
     .testTarget(
       name: "iAgentTests",
-      dependencies: ["iAgentCore", "iAgentPanel"]
+      dependencies: [
+        "iAgentCore",
+        "iAgentActionContracts",
+        "iAgentActions",
+        "iAgentPanel"
+      ]
     )
   ]
 )

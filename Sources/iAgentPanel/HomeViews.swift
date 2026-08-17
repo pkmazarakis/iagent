@@ -4,6 +4,8 @@ import SwiftUI
 enum HomeSection: Int, CaseIterable, Identifiable, Sendable {
     case calendar
     case codex
+    case messages
+    case notes
     case todos
 
     var id: Int { rawValue }
@@ -12,9 +14,43 @@ enum HomeSection: Int, CaseIterable, Identifiable, Sendable {
         switch self {
         case .calendar: "Calendar"
         case .codex: "Codex"
+        case .messages: "Messages"
+        case .notes: "Notes"
         case .todos: "Todos"
         }
     }
+}
+
+enum HomeMessageDotPhase: Equatable, Sendable {
+    case rest
+    case active(Int)
+}
+
+enum HomeMetricMotionPlan {
+    static let stepMilliseconds = 120
+    static let messageDotPulseScale: CGFloat = 1.3
+    static let messageDotLift: CGFloat = 0.75
+
+    static func messageDotPhases(reduceMotion: Bool) -> [HomeMessageDotPhase] {
+        reduceMotion ? [.rest] : [.active(0), .active(1), .active(2), .rest]
+    }
+}
+
+enum HomeMetricGeometry {
+    static let iconSize: CGFloat = 18
+    static let messageDotWidth = iconSize * 2.01 / 24
+    static let messageDotHeight = iconSize * 2 / 24
+    static let messageDotCenterSpacing = iconSize * 4 / 24
+}
+
+enum HomeBriefingCopy {
+    static func unreadMessages(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "unread message" : "unread messages"),"
+    }
+}
+
+enum HomeMetricSymbols {
+    static let notes = "icloud"
 }
 
 private enum HomeAssets {
@@ -32,7 +68,7 @@ private enum HomeAssets {
     )
 
     private static func svg(named name: String, size: NSSize) -> NSImage? {
-        guard let url = Bundle.module.url(
+        guard let url = PanelResourceBundle.bundle.url(
             forResource: name,
             withExtension: "svg",
             subdirectory: "CalendarDays"
@@ -67,7 +103,7 @@ struct HomeDashboardView: View {
                 .font(.system(size: 16, weight: .semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, PanelPageLayout.contentInset)
         .frame(height: 88)
     }
 
@@ -82,6 +118,8 @@ struct HomeDashboardView: View {
     private func briefingText(at date: Date) -> some View {
         let eventCount = calendarService.events.count
         let liveCount = controller.activeCount
+        let unreadMessageCount = controller.unreadMessageConversationCount
+        let noteCount = controller.noteCount
         let todoCount = controller.openTodoCount
         let muted = Color.white.opacity(0.4)
         let primary = Color.white.opacity(0.93)
@@ -124,6 +162,29 @@ struct HomeDashboardView: View {
                 }
             }
 
+            HomeBriefingLink(action: { open(.messages) }) { hovering in
+                HStack(spacing: 5) {
+                    HomeMessageMoreIcon(isHovering: hovering, color: primary)
+
+                    Text(HomeBriefingCopy.unreadMessages(unreadMessageCount))
+                        .foregroundStyle(primary)
+                        .underline(hovering, color: primary)
+                }
+            }
+
+            HomeBriefingLink(action: { open(.notes) }) { hovering in
+                HStack(spacing: 5) {
+                    Image(systemName: HomeMetricSymbols.notes)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(primary)
+                        .frame(width: 18, height: 18)
+
+                    Text("\(noteCount) \(noteCount == 1 ? "note" : "notes"),")
+                        .foregroundStyle(primary)
+                        .underline(hovering, color: primary)
+                }
+            }
+
             Text("and")
                 .foregroundStyle(muted)
 
@@ -159,6 +220,93 @@ struct HomeDashboardView: View {
         }
         return "Your calendar is clear for the rest of today."
     }
+}
+
+private struct HomeMotionTaskID: Equatable {
+    let replayID: Int
+    let reduceMotion: Bool
+}
+
+private struct HomeMessageMoreIcon: View {
+    let isHovering: Bool
+    let color: Color
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var replayID = 0
+    @State private var phase = HomeMessageDotPhase.rest
+
+    var body: some View {
+        ZStack {
+            Group {
+                if let image = AppAssets.messageCircle {
+                    Image(nsImage: image)
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    Image(systemName: "message")
+                        .resizable()
+                        .scaledToFit()
+                }
+            }
+
+            ZStack {
+                ForEach(0 ..< 3, id: \.self) { index in
+                    Capsule()
+                        .frame(
+                            width: HomeMetricGeometry.messageDotWidth,
+                            height: HomeMetricGeometry.messageDotHeight
+                        )
+                        .scaleEffect(
+                            phase == .active(index)
+                                ? HomeMetricMotionPlan.messageDotPulseScale
+                                : 1
+                        )
+                        .offset(
+                            x: CGFloat(index - 1) * HomeMetricGeometry.messageDotCenterSpacing,
+                            y: phase == .active(index) ? -HomeMetricMotionPlan.messageDotLift : 0
+                        )
+                }
+            }
+        }
+        .foregroundStyle(color)
+        .frame(width: HomeMetricGeometry.iconSize, height: HomeMetricGeometry.iconSize)
+        .accessibilityHidden(true)
+        .onChange(of: isHovering) { _, hovering in
+            guard hovering else { return }
+            replayID &+= 1
+        }
+        .task(id: HomeMotionTaskID(replayID: replayID, reduceMotion: reduceMotion)) {
+            await replay()
+        }
+    }
+
+    @MainActor
+    private func replay() async {
+        var reset = Transaction()
+        reset.disablesAnimations = true
+        withTransaction(reset) {
+            phase = .rest
+        }
+
+        guard replayID > 0 else { return }
+        for nextPhase in HomeMetricMotionPlan.messageDotPhases(reduceMotion: reduceMotion) {
+            guard !Task.isCancelled else { return }
+            withAnimation(.timingCurve(0.165, 0.84, 0.44, 1, duration: 0.12)) {
+                phase = nextPhase
+            }
+            guard await sleepForHomeMetricStep() else { return }
+        }
+    }
+}
+
+private func sleepForHomeMetricStep() async -> Bool {
+    do {
+        try await Task.sleep(for: .milliseconds(HomeMetricMotionPlan.stepMilliseconds))
+    } catch {
+        return false
+    }
+    return !Task.isCancelled
 }
 
 private struct HomeBriefingLink<Label: View>: View {
@@ -549,7 +697,7 @@ struct CalendarDayView: View {
                 .buttonStyle(EditorIconButtonStyle())
                 .help("Refresh Calendar")
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, PanelPageLayout.contentInset)
             .frame(height: 38)
 
             calendarContent
@@ -662,7 +810,7 @@ private struct CalendarEventRow: View {
             }
             .fixedSize(horizontal: true, vertical: false)
         }
-        .padding(.leading, 20)
+        .padding(.leading, PanelPageLayout.contentInset)
         .padding(.trailing, 12)
         .frame(height: 40)
         .background(.white.opacity(hovering ? 0.035 : 0))

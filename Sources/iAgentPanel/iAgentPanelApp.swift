@@ -6,17 +6,42 @@ import SwiftUI
 import iAgentCore
 
 private enum PanelMetrics {
-    static let notchSize = NSSize(width: 210, height: 38)
+    static let notchWidth: CGFloat = 210
     static let expandedWidth: CGFloat = 760
-    static let compactSize = NSSize(width: 656, height: 34)
+    // Retina captures use two physical pixels per AppKit point. The requested
+    // 50px and 24px additions add 37pt to the 556pt compact-width baseline.
+    static let compactWidth: CGFloat = 593
+    static let fallbackClosedHeight: CGFloat = 24
     static let maximumExpandedHeight: CGFloat = 348
     static let minimumExpandedHeight: CGFloat = 128
     static let homeExpandedHeight: CGFloat = 128
-    static let headerHeight: CGFloat = 36
+    static let headerHeight: CGFloat = PanelPageLayout.headerHeight
     static let expandedRampWidth: CGFloat = 16
-    static let expandedRampDepth: CGFloat = 20
+    static let expandedRampDepth: CGFloat = expandedRampWidth
     static let topMaskOverscan: CGFloat = 1
-    static let transitionDuration: TimeInterval = 0.3
+    static let transitionDuration: TimeInterval = 0.25
+    static let contentTransitionDuration: TimeInterval = 0.2
+    static let reducedMotionDuration: TimeInterval = 0.14
+    static let transitionX1 = 0.165
+    static let transitionY1 = 0.84
+    static let transitionX2 = 0.44
+    static let transitionY2 = 1.0
+
+    static func closedHeight(for screen: NSScreen?) -> CGFloat {
+        guard let screen else {
+            let statusBarHeight = NSStatusBar.system.thickness
+            return statusBarHeight > 0 ? statusBarHeight : fallbackClosedHeight
+        }
+
+        let reservedMenuBarHeight = max(0, screen.frame.maxY - screen.visibleFrame.maxY)
+        let displayTopInset = max(reservedMenuBarHeight, screen.safeAreaInsets.top)
+        if displayTopInset > 0 {
+            return displayTopInset
+        }
+
+        let statusBarHeight = NSStatusBar.system.thickness
+        return statusBarHeight > 0 ? statusBarHeight : fallbackClosedHeight
+    }
 }
 
 private enum PanelPresentation: Equatable {
@@ -68,12 +93,29 @@ enum ThreadMode: String, Identifiable, Sendable {
     var id: String { rawValue }
 }
 
+struct AgentThreadActivity: Identifiable, Sendable, Equatable {
+    let id: String
+    let text: String
+    let occurredAt: Date
+}
+
+struct AgentThreadVisibleOutput: Identifiable, Sendable, Equatable {
+    let id: String
+    let text: String
+    let occurredAt: Date
+}
+
 struct AgentThread: Identifiable, Sendable, Equatable {
     let id: String
     let projectName: String?
     let workspacePath: String?
+    /// Stable opaque workspace identity used by the cross-device Codex projection.
+    /// It is intentionally separate from the local path, which must never be synced.
+    let workspaceID: String? = nil
     let title: String
     let activity: String
+    var activityHistory: [AgentThreadActivity] = []
+    var visibleOutputs: [AgentThreadVisibleOutput] = []
     let state: AgentState
     let modes: [ThreadMode]
     let elapsed: String
@@ -84,6 +126,8 @@ struct AgentThread: Identifiable, Sendable, Equatable {
 enum PanelContentMode: Hashable, Sendable {
     case home
     case threads
+    case notes
+    case messages
     case calendar
     case create
     case note
@@ -96,6 +140,13 @@ enum NoteSaveState: Equatable, Sendable {
     case idle
     case saving
     case saved
+    case failed(String)
+}
+
+enum MeetingSummaryState: Equatable, Sendable {
+    case idle
+    case generating
+    case ready
     case failed(String)
 }
 
@@ -170,8 +221,26 @@ final class PanelWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
+    override func orderOut(_ sender: Any?) {
+        NotificationCenter.default.post(name: .panelWindowWillOrderOut, object: self)
+        super.orderOut(sender)
+    }
+
     override func constrainFrameRect(_ frameRect: NSRect, to _: NSScreen?) -> NSRect {
         frameRect
+    }
+}
+
+@MainActor
+private final class PanelDisplayLinkTarget: NSObject {
+    private let callback: (CADisplayLink) -> Void
+
+    init(callback: @escaping (CADisplayLink) -> Void) {
+        self.callback = callback
+    }
+
+    @objc func displayLinkDidFire(_ displayLink: CADisplayLink) {
+        callback(displayLink)
     }
 }
 
@@ -179,6 +248,7 @@ final class PanelWindow: NSPanel {
 final class PanelHostingView: NSView {
     private let hostedView: NSHostingView<AnyView>
     private let contourMask = CAShapeLayer()
+    private var contourSize = NSSize.zero
 
     override var acceptsFirstResponder: Bool { true }
     override var isOpaque: Bool { false }
@@ -238,6 +308,16 @@ final class PanelHostingView: NSView {
         needsDisplay = true
     }
 
+    func syncAnimatedGeometry(for size: NSSize) {
+        if abs(frame.width - size.width) > 0.25 || abs(frame.height - size.height) > 0.25 {
+            setFrameSize(size)
+        } else {
+            hostedView.frame = CGRect(origin: .zero, size: size)
+        }
+        needsLayout = true
+        needsDisplay = true
+    }
+
     func renderedContourHasTopRamps() -> Bool {
         layoutSubtreeIfNeeded()
         displayIfNeeded()
@@ -289,8 +369,66 @@ final class PanelHostingView: NSView {
         return hasRamps
     }
 
+    func renderedTransitionHasVisibleContent(centerExclusionWidth: CGFloat) -> Bool {
+        layoutSubtreeIfNeeded()
+        displayIfNeeded()
+        guard bounds.width >= centerExclusionWidth,
+              bounds.height >= 24,
+              let bitmap = bitmapImageRepForCachingDisplay(in: bounds)
+        else {
+            return false
+        }
+        cacheDisplay(in: bounds, to: bitmap)
+
+        let scaleX = CGFloat(bitmap.pixelsWide) / bounds.width
+        let scaleY = CGFloat(bitmap.pixelsHigh) / bounds.height
+        let excludedHalfWidth = centerExclusionWidth * scaleX / 2
+        let excludedMinX = CGFloat(bitmap.pixelsWide) / 2 - excludedHalfWidth
+        let excludedMaxX = CGFloat(bitmap.pixelsWide) / 2 + excludedHalfWidth
+        let sampledHeight = min(bitmap.pixelsHigh, max(1, Int(44 * scaleY)))
+        var visibleSamples = 0
+        var minimumVisibleY = sampledHeight
+        var maximumVisibleY = 0
+
+        for y in stride(from: 0, to: sampledHeight, by: 2) {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: 2) {
+                guard CGFloat(x) < excludedMinX || CGFloat(x) > excludedMaxX,
+                      let color = bitmap.colorAt(x: x, y: y),
+                      let rgb = color.usingColorSpace(.deviceRGB),
+                      rgb.alphaComponent > 0.2,
+                      max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) > 0.24
+                else {
+                    continue
+                }
+                visibleSamples += 1
+                minimumVisibleY = min(minimumVisibleY, y)
+                maximumVisibleY = max(maximumVisibleY, y)
+            }
+        }
+        let minimumVerticalSpan = max(4, Int(5 * scaleY))
+        let verticalSpan = maximumVisibleY - minimumVisibleY
+        let hasUsefulContent = visibleSamples >= 24 && verticalSpan >= minimumVerticalSpan
+        if !hasUsefulContent {
+            print(
+                "[transition-content] samples=\(visibleSamples) span=\(verticalSpan) "
+                    + "required=24/\(minimumVerticalSpan) size="
+                    + "\(Int(bounds.width))x\(Int(bounds.height))"
+            )
+        }
+        return hasUsefulContent
+    }
+
     private func updateContourMask(for size: NSSize) {
-        guard size.width > 0, size.height > 0 else { return }
+        guard size.width > 0, size.height > 0 else {
+            contourSize = .zero
+            return
+        }
+        guard abs(contourSize.width - size.width) > 0.01
+            || abs(contourSize.height - size.height) > 0.01
+        else {
+            return
+        }
+        contourSize = size
         let bounds = CGRect(origin: .zero, size: size)
         let path = PanelContourShape().path(in: bounds).cgPath
 
@@ -302,8 +440,12 @@ final class PanelHostingView: NSView {
         contourMask.path = path
         layer?.mask = contourMask
         CATransaction.commit()
-        CATransaction.flush()
     }
+}
+
+private enum NoteReloadResult: Sendable {
+    case success([LocalDocument])
+    case failure(String)
 }
 
 @MainActor
@@ -312,6 +454,7 @@ final class PanelController: ObservableObject {
     @Published var compactVisible = true
     @Published var contentVisible = false
     @Published private(set) var isPanelHidden = false
+    @Published private(set) var closedPanelHeight = PanelMetrics.fallbackClosedHeight
     @Published var lastOpenSource = "initial"
     @Published var threads: [AgentThread] = []
     @Published var databasePath = ""
@@ -326,6 +469,10 @@ final class PanelController: ObservableObject {
     @Published var contentMode: PanelContentMode = .home {
         didSet {
             guard oldValue != contentMode else { return }
+            if oldValue == .messages, contentMode != .messages {
+                selectedMessageConversationID = nil
+                messageInboxFilter = .all
+            }
             resizeExpandedPanel()
         }
     }
@@ -341,6 +488,9 @@ final class PanelController: ObservableObject {
     @Published var noteShowsRawMarkdown = false
     @Published var noteFindVisible = false
     @Published private(set) var noteSaveState: NoteSaveState = .idle
+    @Published private(set) var meetingSummaryState: MeetingSummaryState = .idle
+    @Published private(set) var meetingSummaryAnimationRevision = 0
+    @Published var selectedMeetingNoteTab: MeetingNoteTab = .summary
     @Published var statusMessage: String?
     @Published var isSubmitting = false
     @Published var isStartingDictation = false
@@ -353,11 +503,25 @@ final class PanelController: ObservableObject {
     @Published private(set) var todoComposerFocusRequest = 0
     @Published private(set) var todoComposerIsFocused = false
     @Published private(set) var todos: [LocalTodo] = []
+    @Published private(set) var notes: [LocalDocument] = []
+    @Published private(set) var noteCount = 0
+    @Published private(set) var noteListIssue: String?
     @Published private(set) var savedTodoListNames: [String] = []
     @Published private(set) var completingTodoIDs: Set<UUID> = []
     @Published private(set) var fadingTodoIDs: Set<UUID> = []
     @Published private(set) var showingPastTodos = false
     @Published private(set) var cloudSyncStatus = IAgentCloudSyncStatus()
+    @Published private(set) var cloudSyncPendingRecordCount = 0
+    @Published private(set) var todoStorageIssue: String?
+    @Published private(set) var messageConversations: [SyncedMessageConversation] = []
+    @Published private(set) var messages: [SyncedMessage] = []
+    @Published private(set) var messageReadStates: [SyncedMessageReadState] = []
+    @Published private(set) var messageRelayStates: [SyncedMessageRelayState] = []
+    @Published private(set) var messageProviderAccess: MessageProviderAccessState = .loading
+    @Published private(set) var messageProviderBackfillInFlight = false
+    @Published var selectedMessageConversationID: String?
+    @Published var messageInboxFilter: MessageInboxFilter = .all
+    private var messageInboxIndex = MessageInboxIndex()
     private(set) var lastOpenedThreadID: String?
 
     let dictation = SpeechDictationService()
@@ -368,11 +532,17 @@ final class PanelController: ObservableObject {
     weak var window: PanelWindow?
     private var transitionID = 0
     private var targetPresentation: PanelPresentation = .compact
-    private var frameAnimationTimer: Timer?
+    private var lastVisiblePresentation: PanelPresentation = .compact
+    private var frameDisplayLink: CADisplayLink?
+    private var frameDisplayLinkTarget: PanelDisplayLinkTarget?
+    private var frameAnimationWatchdogTask: Task<Void, Never>?
+    private var frameAnimationDidAdvance = false
     private var frameAnimationStartFrame = NSRect.zero
     private var frameAnimationTargetFrame = NSRect.zero
     private var frameAnimationStartedAt: TimeInterval = 0
     private var frameAnimationDuration: TimeInterval = 0
+    private var frameAnimationStartAlpha: CGFloat = 1
+    private var frameAnimationTargetAlpha: CGFloat = 1
     private var frameAnimationCompletion: (@MainActor @Sendable () -> Void)?
     private var frameAnimationGeneration = 0
     private var refreshTimer: Timer?
@@ -382,21 +552,41 @@ final class PanelController: ObservableObject {
     private var focusTimer: Timer?
     private var focusEndsAt: Date?
     private var noteAutosaveTask: Task<Void, Never>?
+    private var noteReloadTask: Task<Void, Never>?
+    private var noteReloadGeneration = 0
+    private var meetingSummaryTask: Task<Void, Never>?
+    private var meetingSummaryDocumentID: String?
+    private var meetingCaptureStartTask: Task<Void, Never>?
+    private var meetingCaptureStartID: UUID?
+    private var meetingCaptureStopTask: Task<Bool, Never>?
+    private var meetingCaptureStopID: UUID?
     private var todoCompletionTasks: [UUID: Task<Void, Never>] = [:]
     private var desktopSyncTimer: Timer?
     private var desktopSyncDebounceTask: Task<Void, Never>?
-    private var desktopSyncInFlight = false
+    @Published private var desktopSyncInFlight = false
     private var desktopSyncFetchPending = false
+    private var cloudSyncStatusObserver: NSObjectProtocol?
+    private var cloudSyncStatusRefreshTask: Task<Void, Never>?
+    private var cloudSyncStatusRefreshGeneration = 0
+    private var messageProviderTask: Task<Void, Never>?
+    private var messageProviderRefreshGeneration = 0
+    private var todosAreAuthoritative = true
+    private var todoListNamesAreAuthoritative = true
+    private var todoFileIssue: String?
+    private var todoListFileIssue: String?
     private var hasLoadedThreads = false
     private var loadedThreadLimit = 200
     private let fileMonitor = CodexFileMonitor()
     private let documentStore: LocalDocumentStore
     private let todoStore: LocalTodoStore
     private let desktopSync: DesktopSyncCoordinator
+    private var messageProvider: any MacMessageProviding
     private let projectPreferences: ProjectSectionPreferenceStore
+    private let preferences: UserDefaults
     private let codexClient = CodexAppServerClient()
     private let codexDesktopSender = CodexDesktopPromptSender()
     private let isSmokeTest: Bool
+    private let meetingSummarizer: any MeetingSummarizing = LocalMeetingSummarizer()
 
     var activeCount: Int {
         threads.filter(\.state.isActive).count
@@ -425,6 +615,87 @@ final class PanelController: ObservableObject {
 
     var openTodoCount: Int {
         todos.filter { !$0.isCompleted }.count
+    }
+
+    var visibleMessageConversations: [SyncedMessageConversation] {
+        visibleMessageConversations(referenceDate: referenceNow)
+    }
+
+    var isMessageInboxSyncing: Bool {
+        messageProviderBackfillInFlight
+            || desktopSyncInFlight
+            || cloudSyncStatus.phase == .syncing
+    }
+
+    private func visibleMessageConversations(
+        referenceDate: Date
+    ) -> [SyncedMessageConversation] {
+        messageInboxIndex.orderedVisibleConversations(
+            messageConversations,
+            referenceDate: referenceDate
+        )
+    }
+
+    var totalMessageUnreadCount: Int {
+        visibleMessageConversations.reduce(0) {
+            $0 + messageInboxIndex.unreadCount(
+                for: $1.id,
+                referenceDate: referenceNow
+            )
+        }
+    }
+
+    var unreadMessageConversationCount: Int {
+        visibleMessageConversations.filter {
+            messageInboxIndex.unreadCount(
+                for: $0.id,
+                referenceDate: referenceNow
+            ) > 0
+        }.count
+    }
+
+    var awaitingReplyConversationCount: Int {
+        messageInboxIndex.awaitingMyReplyCount(
+            for: visibleMessageConversations,
+            referenceDate: referenceNow
+        )
+    }
+
+    func retainedMessages(for conversationID: String) -> [SyncedMessage] {
+        messageInboxIndex.retainedMessages(
+            for: conversationID,
+            referenceDate: referenceNow
+        )
+    }
+
+    func unreadCount(for conversationID: String) -> Int {
+        messageInboxIndex.unreadCount(
+            for: conversationID,
+            referenceDate: referenceNow
+        )
+    }
+
+    func isAwaitingReply(for conversation: SyncedMessageConversation) -> Bool {
+        messageInboxIndex.isAwaitingMyReply(
+            for: conversation,
+            referenceDate: referenceNow
+        )
+    }
+
+    func filteredMessageConversations(
+        matching query: String,
+        filter: MessageInboxFilter
+    ) -> [SyncedMessageConversation] {
+        messageInboxIndex.filteredConversations(
+            visibleMessageConversations,
+            query: query,
+            filter: filter,
+            referenceDate: referenceNow
+        )
+    }
+
+    func toggleMessageInboxFilter(_ filter: MessageInboxFilter) {
+        messageInboxFilter = messageInboxFilter == filter ? .all : filter
     }
 
     var editorWordCount: Int {
@@ -507,9 +778,13 @@ final class PanelController: ObservableObject {
         switch contentMode {
         case .home: homeTitle
         case .threads: "Codex"
+        case .notes: "Notes"
+        case .messages: "Messages"
         case .calendar: "Calendar"
         case .create: "Create"
-        case .note: lastSavedDocument == nil ? "New note" : "Note"
+        case .note:
+            if isShowingMeetingNote { "Meeting notes" }
+            else { lastSavedDocument == nil ? "New note" : "Note" }
         case .newThread: "New codex thread"
         case .focus: "New focus session"
         case .todo: showingPastTodos ? "Past todos" : "Todo"
@@ -520,8 +795,32 @@ final class PanelController: ObservableObject {
         localFirstName.map { "Hello \($0)" } ?? "Home"
     }
 
+    var isShowingMeetingNote: Bool {
+        contentMode == .note && MeetingNoteCodec.isMeetingNote(editorBody)
+    }
+
+    var meetingNoteDocument: MeetingNoteDocument? {
+        MeetingNoteCodec.parse(editorBody)
+    }
+
+    var meetingSummaryMarkdown: String {
+        meetingNoteDocument?.summaryMarkdown ?? ""
+    }
+
+    var meetingTranscriptSegments: [MeetingTranscriptSegment] {
+        meetingNoteDocument?.transcriptSegments ?? []
+    }
+
     var expandedSize: NSSize {
         NSSize(width: PanelMetrics.expandedWidth, height: preferredExpandedHeight)
+    }
+
+    var compactSize: NSSize {
+        NSSize(width: PanelMetrics.compactWidth, height: closedPanelHeight)
+    }
+
+    var notchSize: NSSize {
+        NSSize(width: PanelMetrics.notchWidth, height: closedPanelHeight)
     }
 
     private var preferredExpandedHeight: CGFloat {
@@ -541,10 +840,15 @@ final class PanelController: ObservableObject {
                 contentHeight = 102
             }
             height = PanelMetrics.headerHeight + contentHeight
+        case .notes:
+            let visibleRows = min(6, max(2, notes.count))
+            height = PanelMetrics.headerHeight + CGFloat(visibleRows) * 48 + 8
+        case .messages:
+            height = PanelMetrics.maximumExpandedHeight
         case .create:
             height = PanelMetrics.headerHeight + CGFloat(CreationOption.allCases.count) * 44 + 12
         case .note:
-            height = 310
+            height = isShowingMeetingNote ? PanelMetrics.maximumExpandedHeight : 310
         case .newThread:
             height = 260
         case .focus:
@@ -572,6 +876,7 @@ final class PanelController: ObservableObject {
         smokeTest: Bool = CommandLine.arguments.contains("--smoke-test"),
         preferences: UserDefaults = .standard
     ) {
+        self.preferences = preferences
         let fullName = NSFullUserName().trimmingCharacters(in: .whitespacesAndNewlines)
         localFirstName = fullName.split(whereSeparator: \.isWhitespace).first.map(String.init)
         isSmokeTest = smokeTest
@@ -589,12 +894,31 @@ final class PanelController: ObservableObject {
             documentStore: localDocumentStore,
             smokeTest: smokeTest
         )
+        let sandboxAccess = SandboxAccessManager.shared
+        messageProvider = MacMessageProviderFactory.make(
+            smokeTest: smokeTest,
+            preferences: preferences,
+            authorizedDatabaseURL: sandboxAccess.authorizedMessagesDatabaseURL,
+            requiresSecurityScopedDatabaseURL: !smokeTest && sandboxAccess.isSandboxed
+        )
+        noteCount = localDocumentStore.documentCount(for: .note)
         if smokeTest {
             try? FileManager.default.removeItem(at: todoStore.fileURL)
             try? FileManager.default.removeItem(at: todoStore.listFileURL)
         }
-        todos = (try? todoStore.load()) ?? []
-        savedTodoListNames = (try? todoStore.loadListNames()) ?? []
+        do {
+            todos = try todoStore.load()
+        } catch {
+            todosAreAuthoritative = false
+            todoFileIssue = error.localizedDescription
+        }
+        do {
+            savedTodoListNames = try todoStore.loadListNames()
+        } catch {
+            todoListNamesAreAuthoritative = false
+            todoListFileIssue = error.localizedDescription
+        }
+        updateTodoStorageIssue()
         projectOrder = projectPreferences.loadOrder()
         collapsedProjectIDs = projectPreferences.loadCollapsedIDs()
         codexClient.onEvent = { [weak self] event in
@@ -617,11 +941,15 @@ final class PanelController: ObservableObject {
 
     func attach(window: PanelWindow) {
         self.window = window
+        updateClosedPanelHeight(for: window.screen ?? NSScreen.main)
         applyPinnedWindowFrame(targetFrame(expanded: false), display: true)
     }
 
     func startThreadUpdates() {
+        startCloudSyncStatusUpdates()
         calendarService.start()
+        reloadNotes()
+        startMessageProviderUpdates()
         refreshThreads()
         refreshTimer?.invalidate()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -645,12 +973,20 @@ final class PanelController: ObservableObject {
 
     func stopThreadUpdates() {
         cancelFrameAnimation()
+        resetMeetingNotePresentation()
         noteAutosaveTask?.cancel()
         noteAutosaveTask = nil
+        noteReloadTask?.cancel()
+        noteReloadTask = nil
         desktopSyncDebounceTask?.cancel()
         desktopSyncDebounceTask = nil
         desktopSyncTimer?.invalidate()
         desktopSyncTimer = nil
+        stopCloudSyncStatusUpdates()
+        messageProviderTask?.cancel()
+        messageProviderTask = nil
+        messageProviderRefreshGeneration &+= 1
+        messageProviderBackfillInFlight = false
         if contentMode == .note {
             saveLocalDocument(kind: .note, announce: false)
         }
@@ -660,12 +996,189 @@ final class PanelController: ObservableObject {
         refreshDebounceTask = nil
         fileMonitor.stop()
         dictation.cancel()
+        meetingCaptureStartID = nil
+        meetingCaptureStartTask?.cancel()
+        meetingCaptureStartTask = nil
         meetingCapture.shutdown()
         codexClient.stop()
         calendarService.stop()
         Task { await desktopSync.stop() }
         focusTimer?.invalidate()
         focusTimer = nil
+    }
+
+    private func startCloudSyncStatusUpdates() {
+        guard cloudSyncStatusObserver == nil else { return }
+        cloudSyncStatusObserver = NotificationCenter.default.addObserver(
+            forName: .iAgentSyncStatusDidChange,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshCloudSyncStatus()
+            }
+        }
+        refreshCloudSyncStatus()
+    }
+
+    private func stopCloudSyncStatusUpdates() {
+        if let cloudSyncStatusObserver {
+            NotificationCenter.default.removeObserver(cloudSyncStatusObserver)
+            self.cloudSyncStatusObserver = nil
+        }
+        cloudSyncStatusRefreshGeneration &+= 1
+        cloudSyncStatusRefreshTask?.cancel()
+        cloudSyncStatusRefreshTask = nil
+    }
+
+    private func refreshCloudSyncStatus() {
+        guard cloudSyncStatusObserver != nil else { return }
+        cloudSyncStatusRefreshGeneration &+= 1
+        let generation = cloudSyncStatusRefreshGeneration
+        cloudSyncStatusRefreshTask?.cancel()
+        cloudSyncStatusRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            let status = await self.desktopSync.currentCloudSyncStatus()
+            guard !Task.isCancelled,
+                  generation == self.cloudSyncStatusRefreshGeneration
+            else { return }
+            self.cloudSyncStatus = status
+            self.cloudSyncPendingRecordCount = status.pendingRecordCount
+            self.cloudSyncStatusRefreshTask = nil
+        }
+    }
+
+    private func startMessageProviderUpdates() {
+        messageProviderTask?.cancel()
+        messageProviderRefreshGeneration &+= 1
+        let refreshGeneration = messageProviderRefreshGeneration
+        messageProviderBackfillInFlight = true
+        messageProviderTask = Task { [weak self] in
+            guard let self else { return }
+            if !(self.messageProvider is MockMacMessagesProvider) {
+                let cleanedState = await self.desktopSync.removeDevelopmentMessageFixtures()
+                self.applyDesktopSyncState(cleanedState, basedOn: nil)
+            }
+
+            let access = await self.messageProvider.authorizationStatus()
+            guard !Task.isCancelled else {
+                self.finishMessageProviderBackfill(refreshGeneration)
+                return
+            }
+            self.messageProviderAccess = access
+            let relayState = await self.desktopSync.publishMessageRelayState(access)
+            self.applyDesktopSyncState(relayState, basedOn: nil)
+            guard case .authorized = access else {
+                self.finishMessageProviderBackfill(refreshGeneration)
+                return
+            }
+
+            let cutoff = MessageSyncWindow.cutoff()
+            do {
+                let backfill = try await self.messageProvider.backfill(since: cutoff)
+                guard !Task.isCancelled else {
+                    self.finishMessageProviderBackfill(refreshGeneration)
+                    return
+                }
+                self.referenceNow = Date()
+                let initialState = await self.desktopSync.ingestMessageBatch(backfill)
+                self.applyDesktopSyncState(initialState, basedOn: nil)
+                self.markSelectedMessageConversationReadIfNeeded()
+
+                var ingestedFirstUpdate = false
+                for try await batch in self.messageProvider.updates(since: cutoff) {
+                    guard !Task.isCancelled else { return }
+                    self.referenceNow = Date()
+                    let nextState = await self.desktopSync.ingestMessageBatch(batch)
+                    self.applyDesktopSyncState(nextState, basedOn: nil)
+                    self.markSelectedMessageConversationReadIfNeeded()
+                    if !ingestedFirstUpdate {
+                        ingestedFirstUpdate = true
+                        self.finishMessageProviderBackfill(refreshGeneration)
+                    }
+                }
+                self.finishMessageProviderBackfill(refreshGeneration)
+            } catch is CancellationError {
+                self.finishMessageProviderBackfill(refreshGeneration)
+            } catch {
+                self.finishMessageProviderBackfill(refreshGeneration)
+                self.messageProviderAccess = MacMessageProviderFactory.accessState(for: error)
+                let failedState = await self.desktopSync.publishMessageRelayState(
+                    self.messageProviderAccess
+                )
+                self.applyDesktopSyncState(failedState, basedOn: nil)
+            }
+        }
+    }
+
+    private func finishMessageProviderBackfill(_ generation: Int) {
+        guard generation == messageProviderRefreshGeneration else { return }
+        messageProviderBackfillInFlight = false
+    }
+
+    func connectLocalMessages() {
+        guard !isSmokeTest else { return }
+        let sandboxAccess = SandboxAccessManager.shared
+        var authorizedDatabaseURL = sandboxAccess.authorizedMessagesDatabaseURL
+        if sandboxAccess.isSandboxed {
+            do {
+                guard let selectedDatabaseURL = try sandboxAccess
+                    .requestMessagesDirectoryAccess(defaults: preferences)
+                else { return }
+                authorizedDatabaseURL = selectedDatabaseURL
+            } catch {
+                messageProviderAccess = .permissionRequired(error.localizedDescription)
+                Task { [weak self] in
+                    guard let self else { return }
+                    let state = await self.desktopSync.publishMessageRelayState(
+                        self.messageProviderAccess
+                    )
+                    self.applyDesktopSyncState(state, basedOn: nil)
+                }
+                return
+            }
+        }
+        MacMessageProviderFactory.setLocalAccessEnabled(true, preferences: preferences)
+        messageProvider = MacMessageProviderFactory.make(
+            smokeTest: false,
+            preferences: preferences,
+            authorizedDatabaseURL: authorizedDatabaseURL,
+            requiresSecurityScopedDatabaseURL: sandboxAccess.isSandboxed
+        )
+        messageProviderAccess = .loading
+        startMessageProviderUpdates()
+    }
+
+    var messageAccessRecoveryActionTitle: String {
+        SandboxAccessManager.shared.isSandboxed
+            ? "Choose Messages Folder"
+            : "Open Privacy Settings"
+    }
+
+    func recoverLocalMessagesAccess() {
+        if SandboxAccessManager.shared.isSandboxed {
+            connectLocalMessages()
+            return
+        }
+        guard let url = messageFullDiskAccessSettingsURL() else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func markSelectedMessageConversationReadIfNeeded() {
+        guard contentMode == .messages,
+              let conversationID = selectedMessageConversationID,
+              let latest = retainedMessages(for: conversationID).last,
+              unreadCount(for: conversationID) > 0
+        else { return }
+        applyMessageReadStateLocally(conversationID: conversationID, through: latest)
+        Task { [weak self] in
+            guard let self else { return }
+            let state = await self.desktopSync.markMessageConversationRead(
+                conversationID: conversationID,
+                through: latest
+            )
+            self.applyDesktopSyncState(state, basedOn: nil)
+        }
     }
 
     private func refreshThreads() {
@@ -765,17 +1278,21 @@ final class PanelController: ObservableObject {
             return
         }
 
+        retryUnavailableTodoSources()
         let fetchRemote = desktopSyncFetchPending
         desktopSyncFetchPending = false
         desktopSyncInFlight = true
+        cloudSyncStatus.phase = .syncing
         let input = DesktopSyncInput(
             threads: hasLoadedThreads ? threads : nil,
             calendarEvents: calendarService.accessState.canReadEvents
-                ? calendarService.events
+                ? calendarService.syncEvents
                 : nil,
             todos: todos,
             todoListNames: todoListNames,
-            projectOrder: projectOrder
+            projectOrder: projectOrder,
+            todosAreAuthoritative: todosAreAuthoritative,
+            todoListNamesAreAuthoritative: todoListNamesAreAuthoritative
         )
 
         Task { [weak self] in
@@ -794,46 +1311,155 @@ final class PanelController: ObservableObject {
 
     private func applyDesktopSyncState(
         _ state: DesktopWritableSyncState,
-        basedOn input: DesktopSyncInput
+        basedOn input: DesktopSyncInput?
     ) {
-        let inputTodos = Dictionary(uniqueKeysWithValues: input.todos.map { ($0.id, $0) })
-        let currentTodos = Dictionary(uniqueKeysWithValues: todos.map { ($0.id, $0) })
-        let locallyDeletedIDs = Set(inputTodos.keys).subtracting(currentTodos.keys)
-        var mergedTodos = Dictionary(uniqueKeysWithValues: state.todos.map { ($0.id, $0) })
-
-        for id in locallyDeletedIDs {
-            mergedTodos.removeValue(forKey: id)
-        }
-        for current in todos {
-            if let remote = mergedTodos[current.id] {
-                if current.updatedAt > remote.updatedAt {
-                    mergedTodos[current.id] = current
+        if let input {
+            let nextTodos = DesktopTodoReconciler.merge(
+                remote: state.todos,
+                captured: input.todos,
+                current: todos
+            )
+            if input.todosAreAuthoritative {
+                if nextTodos != todos {
+                    do {
+                        try todoStore.save(nextTodos)
+                        todos = nextTodos
+                        todosAreAuthoritative = true
+                        todoFileIssue = nil
+                        resizeExpandedPanel()
+                    } catch {
+                        todosAreAuthoritative = false
+                        todoFileIssue = error.localizedDescription
+                    }
                 }
-            } else if let captured = inputTodos[current.id] {
-                if current.updatedAt > captured.updatedAt {
-                    mergedTodos[current.id] = current
-                }
-            } else {
-                mergedTodos[current.id] = current
+            } else if !todosAreAuthoritative, nextTodos != todos {
+                // Keep remote todos visible while the canonical iCloud file is unavailable.
+                // They remain in memory only; retryUnavailableTodoSources performs the
+                // authoritative merge after the file materializes.
+                todos = nextTodos
+                resizeExpandedPanel()
             }
+
+            if input.todoListNamesAreAuthoritative {
+                let nextListNames = Self.mergedTodoListNames(
+                    local: savedTodoListNames,
+                    remote: state.todoListNames
+                )
+                if nextListNames != savedTodoListNames {
+                    do {
+                        try todoStore.saveListNames(nextListNames)
+                        savedTodoListNames = nextListNames
+                        todoListNamesAreAuthoritative = true
+                        todoListFileIssue = nil
+                    } catch {
+                        todoListNamesAreAuthoritative = false
+                        todoListFileIssue = error.localizedDescription
+                    }
+                }
+            }
+            updateTodoStorageIssue()
+            reloadNotes()
         }
 
-        let nextTodos = mergedTodos.values.sorted { $0.createdAt > $1.createdAt }
-        if nextTodos != todos {
-            todos = nextTodos
-            try? todoStore.save(nextTodos)
+        messageInboxIndex = MessageInboxIndex(
+            messages: state.messages,
+            readStates: state.messageReadStates
+        )
+        messageConversations = state.messageConversations
+        messages = state.messages
+        messageReadStates = state.messageReadStates
+        messageRelayStates = state.messageRelayStates
+        if let selectedMessageConversationID,
+           !visibleMessageConversations.contains(where: { $0.id == selectedMessageConversationID })
+        {
+            self.selectedMessageConversationID = nil
+        }
+        noteCount = state.noteCount
+        cloudSyncStatus = state.status
+        cloudSyncPendingRecordCount = state.pendingRecordCount
+        if state.status.phase == .syncing {
+            refreshCloudSyncStatus()
+        }
+        if contentMode == .messages {
             resizeExpandedPanel()
         }
+    }
 
-        let nextListNames = Self.mergedTodoListNames(
-            local: savedTodoListNames,
-            remote: state.todoListNames
-        )
-        if nextListNames != savedTodoListNames {
-            savedTodoListNames = nextListNames
-            try? todoStore.saveListNames(nextListNames)
+    private func retryUnavailableTodoSources() {
+        if !todosAreAuthoritative {
+            do {
+                let loaded = try todoStore.load()
+                var merged = Dictionary(uniqueKeysWithValues: loaded.map { ($0.id, $0) })
+                for current in todos {
+                    if let stored = merged[current.id] {
+                        if current.updatedAt > stored.updatedAt {
+                            merged[current.id] = current
+                        }
+                    } else {
+                        merged[current.id] = current
+                    }
+                }
+                todos = merged.values.sorted { $0.createdAt > $1.createdAt }
+                try todoStore.save(todos)
+                todosAreAuthoritative = true
+                todoFileIssue = nil
+                resizeExpandedPanel()
+            } catch {
+                todoFileIssue = error.localizedDescription
+            }
         }
-        cloudSyncStatus = state.status
+        if !todoListNamesAreAuthoritative {
+            do {
+                savedTodoListNames = Self.mergedTodoListNames(
+                    local: savedTodoListNames,
+                    remote: try todoStore.loadListNames()
+                )
+                try todoStore.saveListNames(savedTodoListNames)
+                todoListNamesAreAuthoritative = true
+                todoListFileIssue = nil
+            } catch {
+                todoListFileIssue = error.localizedDescription
+            }
+        }
+        updateTodoStorageIssue()
+    }
+
+    private func updateTodoStorageIssue() {
+        let issues = [todoFileIssue, todoListFileIssue].compactMap { $0 }
+        todoStorageIssue = issues.isEmpty ? nil : issues.joined(separator: " ")
+    }
+
+    func syncNow() {
+        scheduleDesktopSync(fetchRemote: true, delay: .zero)
+    }
+
+    var cloudSyncHelpText: String {
+        var parts: [String] = []
+        switch cloudSyncStatus.phase {
+        case .idle:
+            parts.append(cloudSyncPendingRecordCount == 0 ? "Synced" : "Waiting to upload")
+        case .syncing:
+            parts.append("Syncing")
+        case .offline:
+            parts.append("Offline")
+        case .accountUnavailable:
+            parts.append("iCloud unavailable")
+        case .failed:
+            parts.append("Sync needs attention")
+        }
+        if cloudSyncPendingRecordCount > 0 {
+            parts.append("\(cloudSyncPendingRecordCount) queued")
+        }
+        if let lastSuccessfulSyncAt = cloudSyncStatus.lastSuccessfulSyncAt {
+            parts.append("last synced \(lastSuccessfulSyncAt.formatted(date: .abbreviated, time: .shortened))")
+        }
+        if let message = cloudSyncStatus.message, !message.isEmpty {
+            parts.append(message)
+        }
+        if let todoStorageIssue {
+            parts.append(todoStorageIssue)
+        }
+        return parts.joined(separator: " • ")
     }
 
     private static func mergedTodoListNames(
@@ -1046,6 +1672,79 @@ final class PanelController: ObservableObject {
         statusMessage = nil
     }
 
+    func showNotes() {
+        if contentMode == .note, !flushCurrentNoteIfNeeded() { return }
+        reloadNotes()
+        contentMode = .notes
+        statusMessage = nil
+        syncNow()
+    }
+
+    func showMessages() {
+        contentMode = .messages
+        selectedMessageConversationID = nil
+        messageInboxFilter = .all
+        hoveredThreadID = nil
+        statusMessage = nil
+    }
+
+    func selectMessageConversation(_ conversationID: String) {
+        selectedMessageConversationID = conversationID
+        guard let latest = retainedMessages(for: conversationID).last else { return }
+        applyMessageReadStateLocally(conversationID: conversationID, through: latest)
+        Task { [weak self] in
+            guard let self else { return }
+            let state = await self.desktopSync.markMessageConversationRead(
+                conversationID: conversationID,
+                through: latest
+            )
+            self.applyDesktopSyncState(state, basedOn: nil)
+        }
+    }
+
+    func closeMessageConversation() {
+        selectedMessageConversationID = nil
+    }
+
+    func navigateBackFromMessages() {
+        guard contentMode == .messages else {
+            returnHome()
+            return
+        }
+        if selectedMessageConversationID != nil {
+            closeMessageConversation()
+        } else {
+            returnHome()
+        }
+    }
+
+    private func applyMessageReadStateLocally(
+        conversationID: String,
+        through message: SyncedMessage
+    ) {
+        let candidate = SyncedMessageReadState(
+            id: conversationID,
+            readThroughMessageID: message.id,
+            readThroughDate: message.sentAt,
+            latestKnownMessageDate: message.sentAt,
+            updatedAt: Date(),
+            sourceDeviceID: "desktop-local"
+        )
+        var nextReadStates = messageReadStates
+        if let index = nextReadStates.firstIndex(where: { $0.id == conversationID }) {
+            let existingCursor = (
+                nextReadStates[index].readThroughDate ?? .distantPast,
+                nextReadStates[index].readThroughMessageID ?? ""
+            )
+            guard (message.sentAt, message.id) >= existingCursor else { return }
+            nextReadStates[index] = candidate
+        } else {
+            nextReadStates.append(candidate)
+        }
+        messageInboxIndex.replaceReadStates(nextReadStates)
+        messageReadStates = nextReadStates
+    }
+
     func showCalendar() {
         calendarService.start()
         contentMode = .calendar
@@ -1056,13 +1755,77 @@ final class PanelController: ObservableObject {
         showingPastTodos = false
         contentMode = .todo
         statusMessage = nil
+        requestTodoComposerFocus()
     }
 
     func openHomeSection(_ section: HomeSection) {
         switch section {
         case .calendar: showCalendar()
         case .codex: showThreads()
+        case .messages: showMessages()
+        case .notes: showNotes()
         case .todos: showTodos()
+        }
+    }
+
+    func openNote(_ note: LocalDocument) {
+        if contentMode == .note, !flushCurrentNoteIfNeeded() { return }
+
+        resetMeetingNotePresentation()
+        dictation.cancel()
+        isStartingDictation = false
+        dictationTargetThreadID = nil
+        hoveredThreadID = nil
+        selectedCreationOption = .note
+        editorTitle = note.title
+        editorBody = note.body
+        lastSavedDocument = note
+        noteEditorDocumentID = note.id
+        noteShowsRawMarkdown = false
+        noteFindVisible = false
+        noteSaveState = .saved
+        statusMessage = nil
+        contentMode = .note
+        if MeetingNoteCodec.isMeetingNote(note.body) {
+            let summary = meetingSummaryMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !summary.isEmpty, summary != MeetingNoteCodec.pendingSummary {
+                meetingSummaryState = .ready
+                selectedMeetingNoteTab = .summary
+            } else {
+                selectedMeetingNoteTab = .transcript
+            }
+        }
+        setExpanded(true, source: "notes-list")
+    }
+
+    func reloadNotes() {
+        noteReloadGeneration += 1
+        let generation = noteReloadGeneration
+        let store = documentStore
+
+        noteReloadTask?.cancel()
+        noteReloadTask = Task { [weak self] in
+            let result = await Task.detached(priority: .utility) {
+                do {
+                    return NoteReloadResult.success(try store.documents(kind: .note))
+                } catch {
+                    return NoteReloadResult.failure(error.localizedDescription)
+                }
+            }.value
+
+            guard let self,
+                  !Task.isCancelled,
+                  generation == self.noteReloadGeneration
+            else { return }
+
+            switch result {
+            case let .success(documents):
+                self.notes = documents
+                self.noteListIssue = nil
+            case let .failure(message):
+                self.noteListIssue = message
+            }
+            self.resizeExpandedPanel()
         }
     }
 
@@ -1083,6 +1846,7 @@ final class PanelController: ObservableObject {
             resetSharedEditorDraft(for: option)
             showingPastTodos = false
             contentMode = .todo
+            requestTodoComposerFocus()
         }
     }
 
@@ -1096,6 +1860,7 @@ final class PanelController: ObservableObject {
             return
         }
 
+        resetMeetingNotePresentation()
         dictation.cancel()
         isStartingDictation = false
         dictationTargetThreadID = nil
@@ -1157,6 +1922,21 @@ final class PanelController: ObservableObject {
         }
     }
 
+    func updateMeetingSummary(_ summaryMarkdown: String) {
+        guard isShowingMeetingNote else { return }
+        editorBody = MeetingNoteCodec.replacingSummary(
+            in: editorBody,
+            with: summaryMarkdown
+        )
+    }
+
+    func finishMeetingSummaryAnimation(documentID: String) {
+        guard meetingSummaryDocumentID == documentID,
+              case .generating = meetingSummaryState
+        else { return }
+        meetingSummaryState = .ready
+    }
+
     func toggleNoteFind() {
         noteFindVisible.toggle()
         if !noteFindVisible {
@@ -1170,6 +1950,7 @@ final class PanelController: ObservableObject {
     }
 
     private func resetSharedEditorDraft(for option: CreationOption) {
+        resetMeetingNotePresentation()
         isStartingDictation = false
         selectedCreationOption = option
         statusMessage = nil
@@ -1193,6 +1974,7 @@ final class PanelController: ObservableObject {
         dueDate: Date? = nil,
         listName: String? = nil
     ) -> UUID? {
+        guard canEditTodos else { return nil }
         let title = todoDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return nil }
 
@@ -1231,7 +2013,7 @@ final class PanelController: ObservableObject {
                 completingTodoIDs.remove(id)
                 fadingTodoIDs.remove(id)
             }
-            saveTodos()
+            persistTodoMutation(todos[index])
             resizeExpandedPanel()
             return
         }
@@ -1240,7 +2022,7 @@ final class PanelController: ObservableObject {
         todos[index].completedAt = Date()
         todos[index].updatedAt = Date()
         completingTodoIDs.insert(id)
-        saveTodos()
+        persistTodoMutation(todos[index])
 
         todoCompletionTasks[id]?.cancel()
         todoCompletionTasks[id] = Task { @MainActor [weak self] in
@@ -1272,6 +2054,7 @@ final class PanelController: ObservableObject {
     }
 
     func toggleTodoStar(_ id: UUID) {
+        guard canEditTodos else { return }
         guard let index = todos.firstIndex(where: { $0.id == id }) else { return }
         todos[index].isStarred.toggle()
         todos[index].updatedAt = Date()
@@ -1279,6 +2062,7 @@ final class PanelController: ObservableObject {
     }
 
     func toggleTodoDueToday(_ id: UUID) {
+        guard canEditTodos else { return }
         guard let index = todos.firstIndex(where: { $0.id == id }) else { return }
         let calendar = Calendar.autoupdatingCurrent
         if let dueDate = todos[index].dueDate, calendar.isDateInToday(dueDate) {
@@ -1289,6 +2073,7 @@ final class PanelController: ObservableObject {
     }
 
     func setTodoDueDate(_ id: UUID, dueDate: Date?) {
+        guard canEditTodos else { return }
         guard let index = todos.firstIndex(where: { $0.id == id }) else { return }
         todos[index].dueDate = dueDate.map(Calendar.autoupdatingCurrent.startOfDay(for:))
         todos[index].updatedAt = Date()
@@ -1296,6 +2081,7 @@ final class PanelController: ObservableObject {
     }
 
     func setTodoList(_ id: UUID, listName: String?) {
+        guard canEditTodos else { return }
         guard let index = todos.firstIndex(where: { $0.id == id }) else { return }
         let normalized = listName?.trimmingCharacters(in: .whitespacesAndNewlines)
         todos[index].listName = normalized?.isEmpty == false ? normalized : nil
@@ -1327,6 +2113,7 @@ final class PanelController: ObservableObject {
     }
 
     func deleteTodo(_ id: UUID) {
+        guard canEditTodos else { return }
         todoCompletionTasks[id]?.cancel()
         todoCompletionTasks[id] = nil
         withAnimation(.spring(response: 0.26, dampingFraction: 0.9, blendDuration: 0.04)) {
@@ -1338,12 +2125,44 @@ final class PanelController: ObservableObject {
         resizeExpandedPanel()
     }
 
+    private var canEditTodos: Bool {
+        guard todosAreAuthoritative else {
+            statusMessage = todoFileIssue
+                ?? "Todos are read-only until the iCloud file finishes downloading."
+            return false
+        }
+        return true
+    }
+
+    private func persistTodoMutation(_ todo: LocalTodo) {
+        guard !todosAreAuthoritative else {
+            saveTodos()
+            return
+        }
+
+        // The canonical JSON file may be an iCloud placeholder. Never overwrite
+        // it, but do durably stage this one user-authored edit in the sync store.
+        Task { [weak self] in
+            guard let self else { return }
+            let state = await self.desktopSync.publishTodoMutation(todo)
+            self.noteCount = state.noteCount
+            self.cloudSyncStatus = state.status
+            self.cloudSyncPendingRecordCount = state.pendingRecordCount
+        }
+    }
+
     private func saveTodos() {
         do {
             try todoStore.save(todos)
+            todosAreAuthoritative = true
+            todoFileIssue = nil
+            updateTodoStorageIssue()
             statusMessage = nil
             scheduleDesktopSync(fetchRemote: false)
         } catch {
+            todosAreAuthoritative = false
+            todoFileIssue = error.localizedDescription
+            updateTodoStorageIssue()
             statusMessage = "Could not save todos: \(error.localizedDescription)"
         }
     }
@@ -1351,9 +2170,15 @@ final class PanelController: ObservableObject {
     private func saveTodoListNames() {
         do {
             try todoStore.saveListNames(savedTodoListNames)
+            todoListNamesAreAuthoritative = true
+            todoListFileIssue = nil
+            updateTodoStorageIssue()
             statusMessage = nil
             scheduleDesktopSync(fetchRemote: false)
         } catch {
+            todoListNamesAreAuthoritative = false
+            todoListFileIssue = error.localizedDescription
+            updateTodoStorageIssue()
             statusMessage = "Could not save todo lists: \(error.localizedDescription)"
         }
     }
@@ -1426,6 +2251,7 @@ final class PanelController: ObservableObject {
         if contentMode == .note, !flushCurrentNoteIfNeeded() {
             return
         }
+        resetMeetingNotePresentation()
         dictation.cancel()
         isStartingDictation = false
         dictationTargetThreadID = nil
@@ -1461,6 +2287,7 @@ final class PanelController: ObservableObject {
             if contentMode == .note, !flushCurrentNoteIfNeeded() {
                 return
             }
+            resetMeetingNotePresentation()
             isStartingDictation = true
             dictationTargetThreadID = nil
             selectedCreationOption = .note
@@ -1546,6 +2373,15 @@ final class PanelController: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             do {
+                if SandboxAccessManager.shared.isSandboxed {
+                    try await self.codexDesktopSender.startNewThread(prompt)
+                    self.statusMessage = "New Codex task started"
+                    self.isSubmitting = false
+                    self.contentMode = .threads
+                    self.editorBody = ""
+                    self.scheduleThreadRefresh()
+                    return
+                }
                 let submission = try await self.codexClient.startThread(prompt: prompt, cwd: cwd)
                 self.selectedThreadID = submission.threadID
                 self.statusMessage = "New Codex task started"
@@ -1562,6 +2398,12 @@ final class PanelController: ObservableObject {
 
     func openLocalLibrary() {
         let url = documentStore.rootURL
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(url)
+    }
+
+    func openLocalNotesFolder() {
+        let url = documentStore.folderURL(for: .note)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         NSWorkspace.shared.open(url)
     }
@@ -1587,6 +2429,51 @@ final class PanelController: ObservableObject {
                 self.statusMessage = error.localizedDescription
             }
         }
+    }
+
+    private func startMeetingSummary(
+        documentID: String,
+        segments: [MeetingTranscriptSegment]
+    ) {
+        meetingSummaryTask?.cancel()
+        meetingSummaryDocumentID = documentID
+        meetingSummaryState = .generating
+
+        let summarizer = meetingSummarizer
+        meetingSummaryTask = Task { [weak self] in
+            let summary = await Task.detached(priority: .userInitiated) {
+                summarizer.summarize(segments)
+            }.value
+            try? await Task.sleep(for: .milliseconds(620))
+            guard !Task.isCancelled,
+                  let self,
+                  self.meetingSummaryDocumentID == documentID,
+                  self.lastSavedDocument?.id == documentID,
+                  self.isShowingMeetingNote
+            else { return }
+
+            self.editorBody = MeetingNoteCodec.replacingSummary(
+                in: self.editorBody,
+                with: summary
+            )
+            if self.saveLocalDocument(kind: .note, announce: false) {
+                self.meetingSummaryAnimationRevision += 1
+            } else {
+                self.meetingSummaryState = .failed(
+                    self.statusMessage ?? "Could not save the meeting summary"
+                )
+            }
+            self.meetingSummaryTask = nil
+        }
+    }
+
+    private func resetMeetingNotePresentation() {
+        meetingSummaryTask?.cancel()
+        meetingSummaryTask = nil
+        meetingSummaryDocumentID = nil
+        meetingSummaryState = .idle
+        meetingSummaryAnimationRevision = 0
+        selectedMeetingNoteTab = .summary
     }
 
     private var hasDocumentContent: Bool {
@@ -1633,6 +2520,10 @@ final class PanelController: ObservableObject {
             }
             lastSavedDocument = document
             editorTitle = document.title
+            if kind == .note {
+                noteCount = documentStore.documentCount(for: .note)
+                reloadNotes()
+            }
             noteSaveState = .saved
             statusMessage = nil
             scheduleDesktopSync(fetchRemote: false)
@@ -1686,7 +2577,11 @@ final class PanelController: ObservableObject {
         }
 
         if keyCode == 53, contentMode != .home {
-            returnHome()
+            if contentMode == .messages, selectedMessageConversationID != nil {
+                closeMessageConversation()
+            } else {
+                returnHome()
+            }
             return true
         }
 
@@ -1869,14 +2764,31 @@ final class PanelController: ObservableObject {
     }
 
     private func targetFrame(for presentation: PanelPresentation) -> NSRect {
+        let screen = window?.screen ?? NSScreen.main
+        let scale = max(1, window?.backingScaleFactor ?? screen?.backingScaleFactor ?? 1)
+        let measuredClosedHeight = Self.pixelAligned(
+            PanelMetrics.closedHeight(for: screen),
+            scale: scale
+        )
+
         switch presentation {
         case .notch:
-            targetFrame(size: PanelMetrics.notchSize)
+            return targetFrame(
+                size: NSSize(width: PanelMetrics.notchWidth, height: measuredClosedHeight)
+            )
         case .compact:
-            targetFrame(size: PanelMetrics.compactSize)
+            return targetFrame(
+                size: NSSize(width: PanelMetrics.compactWidth, height: measuredClosedHeight)
+            )
         case .expanded:
-            targetFrame(size: expandedSize)
+            return targetFrame(size: expandedSize)
         }
+    }
+
+    private func hiddenAnchorFrame() -> NSRect {
+        return targetFrame(
+            size: NSSize(width: 1, height: closedPanelHeight)
+        )
     }
 
     private func targetFrame(size: NSSize) -> NSRect {
@@ -1901,7 +2813,11 @@ final class PanelController: ObservableObject {
     }
 
     @discardableResult
-    private func applyPinnedWindowFrame(_ proposedFrame: NSRect, display: Bool) -> NSRect {
+    private func applyPinnedWindowFrame(
+        _ proposedFrame: NSRect,
+        display: Bool,
+        synchronizeContent: Bool = true
+    ) -> NSRect {
         guard let window else { return proposedFrame }
         let screen = window.screen ?? NSScreen.main
         let screenFrame = screen?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -1921,7 +2837,11 @@ final class PanelController: ObservableObject {
             window.setFrameTopLeftPoint(NSPoint(x: pinnedFrame.minX, y: top))
         }
         let appliedFrame = window.frame
-        (window.contentView as? PanelHostingView)?.syncContourMask(for: appliedFrame.size)
+        if synchronizeContent {
+            (window.contentView as? PanelHostingView)?.syncContourMask(for: appliedFrame.size)
+        } else {
+            (window.contentView as? PanelHostingView)?.syncAnimatedGeometry(for: appliedFrame.size)
+        }
         if display {
             window.displayIfNeeded()
         }
@@ -1929,9 +2849,9 @@ final class PanelController: ObservableObject {
     }
 
     private func resizeExpandedPanel(animated: Bool = true) {
-        guard targetPresentation == .expanded, let window else { return }
+        guard !isPanelHidden, targetPresentation == .expanded, let window else { return }
         let frame = targetFrame(size: expandedSize)
-        if frameAnimationTimer != nil,
+        if frameDisplayLink != nil,
            Self.framesMatch(frameAnimationTargetFrame, frame)
         {
             return
@@ -1943,7 +2863,7 @@ final class PanelController: ObservableObject {
             return
         }
 
-        if animated {
+        if animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             animateWindow(to: frame, duration: PanelMetrics.transitionDuration)
         } else {
             cancelFrameAnimation()
@@ -1967,6 +2887,7 @@ final class PanelController: ObservableObject {
 
     func startMeetingCapture(_ event: CalendarEventItem) {
         guard !meetingCapture.isActive else { return }
+        resetMeetingNotePresentation()
         if dictation.isRecording || dictationTargetThreadID != nil {
             cancelDictation()
         }
@@ -1980,12 +2901,25 @@ final class PanelController: ObservableObject {
             }
             return
         }
-        Task { [weak self] in
+        let startID = UUID()
+        meetingCaptureStartID = startID
+        meetingCaptureStartTask?.cancel()
+        meetingCaptureStartTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            defer {
+                if self.meetingCaptureStartID == startID {
+                    self.meetingCaptureStartID = nil
+                    self.meetingCaptureStartTask = nil
+                }
+            }
             do {
                 try await self.meetingCapture.start(event: event)
+                guard self.meetingCaptureStartID == startID else { return }
                 self.statusMessage = nil
+            } catch is CancellationError {
+                return
             } catch {
+                guard self.meetingCaptureStartID == startID else { return }
                 self.statusMessage = error.localizedDescription
             }
         }
@@ -2015,16 +2949,34 @@ final class PanelController: ObservableObject {
     }
 
     func stopMeetingCapture() {
-        guard meetingCapture.isActive else { return }
+        guard meetingCapture.canStop else { return }
         let event = meetingCapture.currentEvent
         let startedAt = Date().addingTimeInterval(-meetingCapture.elapsed)
-        Task { [weak self] in
-            guard let self,
-                  let note = await self.meetingCapture.stop()
-            else { return }
+        let stopID = UUID()
+        meetingCaptureStopID = stopID
+        meetingCaptureStopTask = Task { @MainActor [weak self] in
+            guard let self else { return true }
+            defer {
+                if self.meetingCaptureStopID == stopID {
+                    self.meetingCaptureStopID = nil
+                    self.meetingCaptureStopTask = nil
+                }
+            }
+            let note: LocalDocument
+            do {
+                guard let stoppedNote = try await self.meetingCapture.stop() else {
+                    return true
+                }
+                note = stoppedNote
+            } catch {
+                self.statusMessage = error.localizedDescription
+                return false
+            }
 
             let endedAt = Date()
 
+            self.noteCount = self.documentStore.documentCount(for: .note)
+            self.reloadNotes()
             self.lastSavedDocument = note
             self.editorTitle = note.title
             self.editorBody = note.body
@@ -2036,16 +2988,60 @@ final class PanelController: ObservableObject {
             self.contentMode = .note
             self.statusMessage = nil
             self.setExpanded(true, source: "meeting-note")
-            self.requestNoteEditorFocus()
+            self.startMeetingSummary(
+                documentID: note.id,
+                segments: self.meetingCapture.transcriptSegments
+            )
             Task {
                 await self.desktopSync.publishMeeting(
                     document: note,
                     event: event,
                     startedAt: startedAt,
-                    endedAt: endedAt
+                    endedAt: endedAt,
+                    transcriptSegments: self.meetingCapture.transcriptSegments
                 )
             }
+            return true
         }
+    }
+
+    var meetingCaptureNeedsFinalization: Bool {
+        meetingCaptureStartTask != nil
+            || meetingCaptureStopTask != nil
+            || meetingCapture.state.isActive
+    }
+
+    func prepareMeetingCaptureForTermination() async -> Bool {
+        if meetingCapture.isPreparing || meetingCaptureStartTask != nil {
+            meetingCaptureStartID = nil
+            meetingCaptureStartTask?.cancel()
+            meetingCaptureStartTask = nil
+            meetingCapture.cancelPreparation()
+        }
+
+        if let meetingCaptureStopTask {
+            return await meetingCaptureStopTask.value
+        }
+
+        guard meetingCapture.canStop else {
+            return meetingCapture.state != .stopping
+        }
+        do {
+            _ = try await meetingCapture.stop()
+            return true
+        } catch {
+            statusMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func cancelMeetingCapturePreparation() {
+        guard meetingCapture.isPreparing else { return }
+        meetingCaptureStartID = nil
+        meetingCaptureStartTask?.cancel()
+        meetingCaptureStartTask = nil
+        meetingCapture.cancelPreparation()
+        statusMessage = nil
     }
 
     func dismissMeetingCaptureFailure() {
@@ -2054,6 +3050,7 @@ final class PanelController: ObservableObject {
     }
 
     func handleGlobalPanelEvent(_ event: NSEvent) {
+        guard !isPanelHidden else { return }
         if event.type == .leftMouseDown, targetPresentation == .expanded {
             handleOutsideClick()
             return
@@ -2068,7 +3065,7 @@ final class PanelController: ObservableObject {
     }
 
     func handleOutsideClick() {
-        guard targetPresentation == .expanded else { return }
+        guard !isPanelHidden, targetPresentation == .expanded else { return }
         setCompact(source: "outside-click")
     }
 
@@ -2076,8 +3073,8 @@ final class PanelController: ObservableObject {
         let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) ?? NSScreen.main
         guard let screen else { return false }
 
-        let triggerWidth = PanelMetrics.notchSize.width + 36
-        let triggerHeight = PanelMetrics.notchSize.height + 18
+        let triggerWidth = PanelMetrics.notchWidth + 36
+        let triggerHeight = PanelMetrics.closedHeight(for: screen) + 18
         let triggerFrame = NSRect(
             x: screen.frame.midX - triggerWidth / 2,
             y: screen.frame.maxY - triggerHeight,
@@ -2089,43 +3086,172 @@ final class PanelController: ObservableObject {
 
     func toggleFromGlobalHotKey() {
         if isPanelHidden {
-            isPanelHidden = false
-            guard let window else { return }
-            window.alphaValue = 1
-            window.ignoresMouseEvents = false
-            window.orderFrontRegardless()
-
-            if meetingCapture.isActive {
-                targetPresentation = .compact
-                expanded = false
-                compactVisible = true
-                contentVisible = false
-                applyPinnedWindowFrame(targetFrame(for: .compact), display: true)
-            } else {
-                setExpanded(true, source: "option-space-restore")
-            }
+            showPanelFromHidden(
+                to: meetingCapture.isActive ? .compact : .expanded,
+                source: "option-space-restore",
+                animated: true
+            )
             return
         }
 
         toggle()
     }
 
-    func hidePanelCompletely() {
-        guard !isPanelHidden else { return }
+    func togglePanelVisibility() {
+        if isPanelHidden {
+            let restoredPresentation = meetingCapture.isActive
+                ? PanelPresentation.compact
+                : lastVisiblePresentation
+            showPanelFromHidden(
+                to: restoredPresentation,
+                source: "option-m-restore",
+                animated: true
+            )
+        } else {
+            hidePanelCompletely(animated: true)
+        }
+    }
+
+    private func hidePanelCompletely(animated: Bool) {
+        guard !isPanelHidden, let window else { return }
+        lastVisiblePresentation = targetPresentation == .expanded ? .expanded : .compact
         isPanelHidden = true
         transitionID += 1
-        cancelFrameAnimation()
+        let activeTransition = transitionID
         dictation.cancel()
         dictationTargetThreadID = nil
         hoveredThreadID = nil
+        window.ignoresMouseEvents = true
 
-        window?.alphaValue = 0
-        window?.ignoresMouseEvents = true
-        targetPresentation = .compact
-        expanded = false
-        compactVisible = true
-        contentVisible = false
-        applyPinnedWindowFrame(targetFrame(for: .compact), display: false)
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            expanded = lastVisiblePresentation == .expanded
+            compactVisible = lastVisiblePresentation == .compact
+            contentVisible = lastVisiblePresentation == .expanded
+        }
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+
+        let completion: @MainActor @Sendable () -> Void = { [weak self, weak window] in
+            guard let self,
+                  let window,
+                  self.isPanelHidden,
+                  activeTransition == self.transitionID
+            else {
+                return
+            }
+            window.alphaValue = 0
+            self.applyPinnedWindowFrame(self.hiddenAnchorFrame(), display: false)
+            window.orderOut(nil)
+        }
+
+        guard animated else {
+            cancelFrameAnimation()
+            completion()
+            return
+        }
+
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            animateWindow(
+                to: window.frame,
+                duration: PanelMetrics.reducedMotionDuration,
+                targetAlpha: 0,
+                completion: completion
+            )
+        } else {
+            window.alphaValue = 1
+            animateWindow(
+                to: hiddenAnchorFrame(),
+                duration: PanelMetrics.transitionDuration,
+                completion: completion
+            )
+        }
+    }
+
+    private func showPanelFromHidden(
+        to requestedPresentation: PanelPresentation,
+        source: String,
+        animated: Bool
+    ) {
+        guard isPanelHidden, let window else { return }
+        let nextPresentation = requestedPresentation == .notch ? .compact : requestedPresentation
+        let wasFullyHidden = !window.isVisible || window.alphaValue <= 0.001
+
+        isPanelHidden = false
+        targetPresentation = nextPresentation
+        transitionID += 1
+        let activeTransition = transitionID
+
+        if nextPresentation == .expanded {
+            lastOpenSource = source
+            calendarService.start()
+        }
+
+        cancelFrameAnimation()
+        if wasFullyHidden {
+            applyPinnedWindowFrame(hiddenAnchorFrame(), display: false)
+        }
+
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            expanded = nextPresentation == .expanded
+            compactVisible = nextPresentation == .compact
+            contentVisible = nextPresentation == .expanded
+        }
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.ignoresMouseEvents = false
+
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if reduceMotion {
+            if wasFullyHidden {
+                window.alphaValue = 0
+            }
+            applyPinnedWindowFrame(targetFrame(for: nextPresentation), display: false)
+        } else {
+            window.alphaValue = 1
+        }
+        window.orderFrontRegardless()
+
+        let completion: @MainActor @Sendable () -> Void = { [weak self] in
+            guard let self,
+                  !self.isPanelHidden,
+                  activeTransition == self.transitionID
+            else {
+                return
+            }
+            if nextPresentation == .expanded {
+                self.focusPanelForKeyboardNavigation()
+            }
+        }
+
+        guard animated else {
+            cancelFrameAnimation()
+            window.alphaValue = 1
+            applyPinnedWindowFrame(targetFrame(for: nextPresentation), display: true)
+            completion()
+            return
+        }
+
+        if reduceMotion {
+            animateWindow(
+                to: window.frame,
+                duration: PanelMetrics.reducedMotionDuration,
+                targetAlpha: 1,
+                completion: completion
+            )
+        } else {
+            animateWindow(
+                to: targetFrame(for: nextPresentation),
+                duration: PanelMetrics.transitionDuration,
+                completion: completion
+            )
+        }
+
+        if nextPresentation == .expanded {
+            focusPanelForKeyboardNavigation()
+        }
     }
 
     func toggle() {
@@ -2155,10 +3281,12 @@ final class PanelController: ObservableObject {
         animated: Bool
     ) {
         if isPanelHidden {
-            isPanelHidden = false
-            window?.alphaValue = 1
-            window?.ignoresMouseEvents = false
-            window?.orderFrontRegardless()
+            showPanelFromHidden(
+                to: nextPresentation,
+                source: source,
+                animated: animated
+            )
+            return
         }
         guard nextPresentation != targetPresentation || !animated else { return }
         targetPresentation = nextPresentation
@@ -2177,10 +3305,32 @@ final class PanelController: ObservableObject {
         guard let window else { return }
         window.orderFrontRegardless()
 
+        guard animated else {
+            cancelFrameAnimation()
+            expanded = nextPresentation == .expanded
+            compactVisible = nextPresentation == .compact
+            contentVisible = nextPresentation == .expanded
+            applyPinnedWindowFrame(targetFrame(for: nextPresentation), display: true)
+            if nextPresentation == .expanded {
+                focusPanelForKeyboardNavigation()
+            }
+            return
+        }
+
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let contentAnimation: Animation? = reduceMotion
+            ? nil
+            : Animation.timingCurve(
+                PanelMetrics.transitionX1,
+                PanelMetrics.transitionY1,
+                PanelMetrics.transitionX2,
+                PanelMetrics.transitionY2,
+                duration: PanelMetrics.contentTransitionDuration
+            )
+
         switch nextPresentation {
         case .expanded:
             expanded = true
-            compactVisible = false
             contentVisible = false
             window.contentView?.layoutSubtreeIfNeeded()
             focusPanelForKeyboardNavigation()
@@ -2189,60 +3339,84 @@ final class PanelController: ObservableObject {
                 self.focusPanelForKeyboardNavigation()
             }
         case .compact:
-            withAnimation(.timingCurve(0.165, 0.84, 0.44, 1, duration: 0.12)) {
-                contentVisible = false
-            }
-            if !animated || !expanded {
-                expanded = false
+            var compactTransaction = Transaction()
+            compactTransaction.disablesAnimations = true
+            withTransaction(compactTransaction) {
                 compactVisible = true
-                window.contentView?.layoutSubtreeIfNeeded()
             }
-        case .notch:
-            withAnimation(.timingCurve(0.165, 0.84, 0.44, 1, duration: 0.12)) {
+            withAnimation(contentAnimation) {
                 contentVisible = false
             }
-        }
-
-        guard animated else {
-            cancelFrameAnimation()
-            expanded = nextPresentation == .expanded
-            compactVisible = nextPresentation == .compact
-            contentVisible = nextPresentation == .expanded
-            applyPinnedWindowFrame(targetFrame(for: nextPresentation), display: true)
-            return
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        case .notch:
+            withAnimation(contentAnimation) {
+                compactVisible = false
+                contentVisible = false
+            }
         }
 
         if nextPresentation == .expanded {
-            animateWindow(
-                to: targetFrame(for: .expanded),
-                duration: PanelMetrics.transitionDuration
-            ) { [weak self] in
-                self?.focusPanelForKeyboardNavigation()
-            }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) { [weak self] in
-                guard let self, activeTransition == self.transitionID else { return }
-                withAnimation(.timingCurve(0.165, 0.84, 0.44, 1, duration: 0.14)) {
-                    self.contentVisible = true
+            if reduceMotion {
+                cancelFrameAnimation()
+                applyPinnedWindowFrame(targetFrame(for: .expanded), display: true)
+            } else {
+                animateWindow(
+                    to: targetFrame(for: .expanded),
+                    duration: PanelMetrics.transitionDuration
+                ) { [weak self] in
+                    self?.focusPanelForKeyboardNavigation()
                 }
             }
+
+            // Start the surface crossfade in the same transaction as the window morph.
+            // A delayed dispatch can be starved by main-thread work and leave a blank shell.
+            withAnimation(contentAnimation) {
+                compactVisible = false
+                contentVisible = true
+            }
+            if reduceMotion {
+                focusPanelForKeyboardNavigation()
+            }
         } else if nextPresentation == .compact {
-            animateWindow(
-                to: targetFrame(for: .compact),
-                duration: PanelMetrics.transitionDuration
-            ) { [weak self] in
+            let completion: @MainActor @Sendable () -> Void = { [weak self] in
                 guard let self, activeTransition == self.transitionID else { return }
                 self.expanded = false
                 self.compactVisible = true
             }
+            if reduceMotion {
+                cancelFrameAnimation()
+                applyPinnedWindowFrame(targetFrame(for: .compact), display: true)
+                DispatchQueue.main.asyncAfter(
+                    deadline: .now() + PanelMetrics.contentTransitionDuration,
+                    execute: completion
+                )
+            } else {
+                animateWindow(
+                    to: targetFrame(for: .compact),
+                    duration: PanelMetrics.transitionDuration,
+                    completion: completion
+                )
+            }
         } else {
-            animateWindow(
-                to: targetFrame(for: .notch),
-                duration: PanelMetrics.transitionDuration
-            ) { [weak self] in
+            let completion: @MainActor @Sendable () -> Void = { [weak self] in
                 guard let self, activeTransition == self.transitionID else { return }
                 self.expanded = false
                 self.compactVisible = false
+            }
+            if reduceMotion {
+                cancelFrameAnimation()
+                applyPinnedWindowFrame(targetFrame(for: .notch), display: true)
+                DispatchQueue.main.asyncAfter(
+                    deadline: .now() + PanelMetrics.contentTransitionDuration,
+                    execute: completion
+                )
+            } else {
+                animateWindow(
+                    to: targetFrame(for: .notch),
+                    duration: PanelMetrics.transitionDuration,
+                    completion: completion
+                )
             }
         }
     }
@@ -2250,6 +3424,7 @@ final class PanelController: ObservableObject {
     private func animateWindow(
         to frame: NSRect,
         duration: TimeInterval,
+        targetAlpha: CGFloat? = nil,
         completion: (@MainActor @Sendable () -> Void)? = nil
     ) {
         guard let window else { return }
@@ -2257,29 +3432,80 @@ final class PanelController: ObservableObject {
         frameAnimationStartFrame = window.frame
         frameAnimationTargetFrame = frame
         frameAnimationStartedAt = CACurrentMediaTime()
-        frameAnimationDuration = duration
+        frameAnimationDuration = max(0.001, duration)
+        frameAnimationStartAlpha = window.alphaValue
+        frameAnimationTargetAlpha = targetAlpha ?? window.alphaValue
         frameAnimationCompletion = completion
         frameAnimationGeneration += 1
+        frameAnimationDidAdvance = false
 
-        let timer = Timer(timeInterval: 1 / 120, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.advanceFrameAnimation()
-            }
-        }
-        frameAnimationTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
-        timer.fire()
-    }
-
-    private func advanceFrameAnimation() {
-        guard window != nil else {
-            cancelFrameAnimation()
+        if Self.framesMatch(frameAnimationStartFrame, frameAnimationTargetFrame),
+           abs(frameAnimationStartAlpha - frameAnimationTargetAlpha) <= 0.001
+        {
+            applyPinnedWindowFrame(frameAnimationTargetFrame, display: true)
+            window.alphaValue = frameAnimationTargetAlpha
+            frameAnimationCompletion = nil
+            completion?()
             return
         }
 
+        let target = PanelDisplayLinkTarget { [weak self] displayLink in
+            self?.advanceFrameAnimation(at: displayLink.timestamp)
+        }
+        let displayLink = window.displayLink(
+            target: target,
+            selector: #selector(PanelDisplayLinkTarget.displayLinkDidFire(_:))
+        )
+        frameDisplayLinkTarget = target
+        frameDisplayLink = displayLink
+        displayLink.add(to: .main, forMode: .common)
+
+        let activeGeneration = frameAnimationGeneration
+        let hardDeadline = frameAnimationDuration + 0.08
+        frameAnimationWatchdogTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 60_000_000)
+            } catch {
+                return
+            }
+            guard let self,
+                  self.frameAnimationGeneration == activeGeneration,
+                  self.frameDisplayLink != nil
+            else {
+                return
+            }
+            guard self.frameAnimationDidAdvance else {
+                self.finishFrameAnimation()
+                return
+            }
+
+            let remaining = max(0, hardDeadline - 0.06)
+            do {
+                try await Task.sleep(
+                    nanoseconds: UInt64((remaining * 1_000_000_000).rounded())
+                )
+            } catch {
+                return
+            }
+            guard self.frameAnimationGeneration == activeGeneration,
+                  self.frameDisplayLink != nil
+            else {
+                return
+            }
+            self.finishFrameAnimation()
+        }
+    }
+
+    private func advanceFrameAnimation(at timestamp: TimeInterval) {
+        guard let window else {
+            cancelFrameAnimation()
+            return
+        }
+        frameAnimationDidAdvance = true
+
         let linearProgress = min(
             1,
-            max(0, (CACurrentMediaTime() - frameAnimationStartedAt) / frameAnimationDuration)
+            max(0, (timestamp - frameAnimationStartedAt) / frameAnimationDuration)
         )
         let easedProgress = Self.panelAnimationProgress(linearProgress)
         let nextFrame = NSRect(
@@ -2292,21 +3518,55 @@ final class PanelController: ObservableObject {
             height: frameAnimationStartFrame.height
                 + (frameAnimationTargetFrame.height - frameAnimationStartFrame.height) * easedProgress
         )
-        applyPinnedWindowFrame(nextFrame, display: true)
+        let nextAlpha = frameAnimationStartAlpha
+            + (frameAnimationTargetAlpha - frameAnimationStartAlpha) * easedProgress
+        let visuallySettled = linearProgress >= 0.8
+            && Self.framesMatch(nextFrame, frameAnimationTargetFrame)
+            && abs(nextAlpha - frameAnimationTargetAlpha) <= 0.002
 
-        if linearProgress >= 1 {
-            let completion = frameAnimationCompletion
-            frameAnimationTimer?.invalidate()
-            frameAnimationTimer = nil
-            frameAnimationCompletion = nil
-            applyPinnedWindowFrame(frameAnimationTargetFrame, display: true)
-            completion?()
+        if linearProgress >= 1 || visuallySettled {
+            finishFrameAnimation()
+            return
+        }
+
+        if !Self.framesMatch(window.frame, nextFrame) {
+            applyPinnedWindowFrame(
+                nextFrame,
+                display: false,
+                synchronizeContent: false
+            )
+        }
+        if abs(window.alphaValue - nextAlpha) > 0.001 {
+            window.alphaValue = nextAlpha
         }
     }
 
+    private func finishFrameAnimation() {
+        guard let window else {
+            cancelFrameAnimation()
+            return
+        }
+        let completion = frameAnimationCompletion
+        frameDisplayLink?.invalidate()
+        frameDisplayLink = nil
+        frameDisplayLinkTarget = nil
+        frameAnimationWatchdogTask?.cancel()
+        frameAnimationWatchdogTask = nil
+        frameAnimationCompletion = nil
+        applyPinnedWindowFrame(
+            frameAnimationTargetFrame,
+            display: true
+        )
+        window.alphaValue = frameAnimationTargetAlpha
+        completion?()
+    }
+
     private func cancelFrameAnimation() {
-        frameAnimationTimer?.invalidate()
-        frameAnimationTimer = nil
+        frameDisplayLink?.invalidate()
+        frameDisplayLink = nil
+        frameDisplayLinkTarget = nil
+        frameAnimationWatchdogTask?.cancel()
+        frameAnimationWatchdogTask = nil
         frameAnimationCompletion = nil
     }
 
@@ -2318,10 +3578,10 @@ final class PanelController: ObservableObject {
     }
 
     private static func panelAnimationProgress(_ progress: Double) -> CGFloat {
-        let x1 = 0.165
-        let y1 = 0.84
-        let x2 = 0.44
-        let y2 = 1.0
+        let x1 = PanelMetrics.transitionX1
+        let y1 = PanelMetrics.transitionY1
+        let x2 = PanelMetrics.transitionX2
+        let y2 = PanelMetrics.transitionY2
         var parameter = progress
 
         for _ in 0 ..< 7 {
@@ -2353,8 +3613,24 @@ final class PanelController: ObservableObject {
     }
 
     func repositionForCurrentScreen() {
-        guard window != nil else { return }
-        applyPinnedWindowFrame(targetFrame(for: targetPresentation), display: true)
+        guard let window else { return }
+        updateClosedPanelHeight(for: window.screen ?? NSScreen.main)
+        if isPanelHidden {
+            cancelFrameAnimation()
+            applyPinnedWindowFrame(hiddenAnchorFrame(), display: false)
+            window.alphaValue = 0
+            window.orderOut(nil)
+        } else {
+            applyPinnedWindowFrame(targetFrame(for: targetPresentation), display: true)
+        }
+    }
+
+    private func updateClosedPanelHeight(for screen: NSScreen?) {
+        let scale = max(1, window?.backingScaleFactor ?? screen?.backingScaleFactor ?? 1)
+        let nextHeight = Self.pixelAligned(PanelMetrics.closedHeight(for: screen), scale: scale)
+        if abs(closedPanelHeight - nextHeight) > 0.25 {
+            closedPanelHeight = nextHeight
+        }
     }
 
     func capturePNG(named filename: String) throws -> URL {
@@ -2595,10 +3871,41 @@ final class PanelController: ObservableObject {
             throw SmokeError("Keyboard reveal logic must leave visible rows still and reveal only clipped rows.")
         }
 
+        let curveCheckpoints: [(Double, CGFloat)] = [
+            (0, 0),
+            (0.25, 0.698_242_905),
+            (0.5, 0.914_569_220),
+            (0.75, 0.985_256_531),
+            (1, 1),
+        ]
+        guard curveCheckpoints.allSatisfy({ progress, expected in
+            abs(Self.panelAnimationProgress(progress) - expected) <= 0.000_001
+        }) else {
+            throw SmokeError("Panel motion must use cubic-bezier(0.165, 0.84, 0.44, 1).")
+        }
+        let curveSamples = (0 ... 40).map {
+            Self.panelAnimationProgress(Double($0) / 40)
+        }
+        guard zip(curveSamples, curveSamples.dropFirst()).allSatisfy({ $0 <= $1 }) else {
+            throw SmokeError("Panel motion curve must remain monotonic.")
+        }
+
         let expandedContour = PanelContourShape().path(
             in: CGRect(x: 0, y: 0, width: PanelMetrics.expandedWidth, height: 348)
         )
+        let quarterCircleY = PanelMetrics.expandedRampWidth * (1 - 1 / sqrt(2))
+        let quarterCircleX = PanelMetrics.expandedRampWidth / sqrt(2)
         guard expandedContour.contains(CGPoint(x: 10, y: 1)),
+              expandedContour.contains(CGPoint(x: 1, y: 0.01)),
+              expandedContour.contains(
+                  CGPoint(x: PanelMetrics.expandedWidth - 1, y: 0.01)
+              ),
+              !expandedContour.contains(
+                  CGPoint(x: quarterCircleX - 0.5, y: quarterCircleY)
+              ),
+              expandedContour.contains(
+                  CGPoint(x: quarterCircleX + 0.5, y: quarterCircleY)
+              ),
               !expandedContour.contains(CGPoint(x: 2, y: 36)),
               expandedContour.contains(CGPoint(x: 18, y: 36)),
               expandedContour.contains(CGPoint(x: PanelMetrics.expandedWidth - 10, y: 1)),
@@ -2606,7 +3913,19 @@ final class PanelController: ObservableObject {
               expandedContour.contains(CGPoint(x: PanelMetrics.expandedWidth - 18, y: 36)),
               ThreadMode.plan.symbol == "lightbulb"
         else {
-            throw SmokeError("Expected symmetric concave top ramps and the lightbulb plan glyph.")
+            throw SmokeError("Expected symmetric tangent quarter-circle ramps and the lightbulb plan glyph.")
+        }
+
+        for width in [1.0, 16.0, 32.0, PanelMetrics.compactWidth, PanelMetrics.expandedWidth] {
+            let rect = CGRect(x: 0, y: 0, width: width, height: 48)
+            let bounds = PanelContourShape().path(in: rect).boundingRect
+            guard bounds.minX >= rect.minX - 0.01,
+                  bounds.maxX <= rect.maxX + 0.01,
+                  bounds.minY <= rect.minY,
+                  bounds.maxY <= rect.maxY + 0.01
+            else {
+                throw SmokeError("Panel contour crossed itself while revealing at width \(width).")
+            }
         }
 
         let openingRects = [
@@ -2614,8 +3933,8 @@ final class PanelController: ObservableObject {
             CGRect(
                 x: 0,
                 y: 0,
-                width: PanelMetrics.compactSize.width,
-                height: PanelMetrics.compactSize.height
+                width: compactSize.width,
+                height: compactSize.height
             ),
             CGRect(x: 0, y: 0, width: 360, height: 96),
             CGRect(x: 0, y: 0, width: 560, height: 210),
@@ -2650,9 +3969,12 @@ final class PanelController: ObservableObject {
 
             do {
                 try self.validateThreadPresentationLogic()
-                guard let window = self.window, let screenFrame = NSScreen.main?.frame else {
+                guard let window = self.window,
+                      let screen = window.screen ?? NSScreen.main
+                else {
                     throw SmokeError("Window or screen is unavailable.")
                 }
+                let screenFrame = screen.frame
 
                 guard self.contentMode == .home,
                       self.panelTitle == self.homeTitle,
@@ -2669,8 +3991,15 @@ final class PanelController: ObservableObject {
                     throw SmokeError("Expected collapsed notch to touch physical screen top. frame=\(collapsedFrame) screen=\(screenFrame)")
                 }
 
-                guard collapsedFrame.height <= 42, collapsedFrame.width <= 220 else {
-                    throw SmokeError("Expected compact notch frame, got \(collapsedFrame).")
+                let expectedClosedHeight = PanelMetrics.closedHeight(for: screen)
+                guard abs(collapsedFrame.height - expectedClosedHeight) <= 0.5,
+                      abs(collapsedFrame.height - self.closedPanelHeight) <= 0.5,
+                      abs(collapsedFrame.width - PanelMetrics.notchWidth) <= 0.5
+                else {
+                    throw SmokeError(
+                        "Expected the collapsed panel to match the menu bar height. "
+                            + "frame=\(collapsedFrame) expectedHeight=\(expectedClosedHeight)"
+                    )
                 }
 
                 let triggerProbe = NSPoint(x: screenFrame.midX, y: screenFrame.maxY - collapsedFrame.height)
@@ -2691,18 +4020,16 @@ final class PanelController: ObservableObject {
                     throw SmokeError("Synthetic scroll-wheel event did not reach the notch handler.")
                 }
 
-                for (delay, filename) in [
-                    (0.016, "iagent-native-panel-opening-016ms.png"),
-                    (0.045, "iagent-native-panel-opening-045ms.png"),
-                    (0.080, "iagent-native-panel-opening-080ms.png"),
-                ] {
+                // Keep these frame probes read-only. Rasterizing several screenshots on the
+                // main run loop stalls SwiftUI's reveal transaction and changes the motion
+                // being measured.
+                for delay in [0.016, 0.045, 0.080] {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                        _ = try? self.capturePNG(named: filename)
-                        guard let hostingView = window.contentView as? PanelHostingView,
-                              hostingView.renderedContourHasTopRamps(),
-                              abs(window.frame.maxY - screenFrame.maxY) <= 0.01
+                        guard abs(window.frame.maxY - screenFrame.maxY) <= 0.01
                         else {
-                            self.failSmoke("Panel detached or its rendered ramps disappeared at \(Int(delay * 1_000))ms during opening.")
+                            self.failSmoke(
+                                "Panel detached at \(Int(delay * 1_000))ms during opening."
+                            )
                             return
                         }
                     }
@@ -2722,11 +4049,14 @@ final class PanelController: ObservableObject {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
                     let frame = window.frame
                     guard frame.width > collapsedFrame.width + 24,
-                          frame.width < expectedExpandedSize.width,
+                          frame.width <= expectedExpandedSize.width + 0.5,
                           frame.height > collapsedFrame.height + 16,
-                          frame.height < expectedExpandedSize.height,
+                          frame.height <= expectedExpandedSize.height + 0.5,
                           abs(frame.maxY - screenFrame.maxY) <= 0.01,
-                          (window.contentView as? PanelHostingView)?.renderedContourHasTopRamps() == true
+                          (window.contentView as? PanelHostingView)?.renderedContourHasTopRamps() == true,
+                          (window.contentView as? PanelHostingView)?.renderedTransitionHasVisibleContent(
+                              centerExclusionWidth: PanelMetrics.notchWidth
+                          ) == true
                     else {
                         self.failSmoke("Open animation lost its pinned frame or rendered ramps: \(frame).")
                         return
@@ -2734,7 +4064,10 @@ final class PanelController: ObservableObject {
                     _ = try? self.capturePNG(named: "iagent-native-panel-opening.png")
                 }
 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.48) {
+                // The intermediate raster capture above is intentionally exhaustive and can
+                // briefly pause the smoke process's main run loop. Give the frame timer room
+                // to settle after that diagnostic-only work.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                     do {
                         let expandedFrame = window.frame
                         guard self.expanded, self.lastOpenSource == "wheel" else {
@@ -2948,10 +4281,12 @@ final class PanelController: ObservableObject {
                 }
                 try await Task.sleep(for: .milliseconds(380))
 
-                guard !self.todoComposerIsFocused else {
-                    throw SmokeError("Expected Todo to open with a genuine idle composer state.")
+                guard self.todoComposerIsFocused else {
+                    throw SmokeError("Expected Todo to open with its composer focused.")
                 }
-                let todoInputIdleURL = try self.capturePNG(named: "iagent-todo-input-idle.png")
+                let todoInputAutoFocusedURL = try self.capturePNG(
+                    named: "iagent-todo-input-auto-focused.png"
+                )
                 let focusRequest = self.todoComposerFocusRequest
                 guard self.handleKeyEvent(14, modifiers: .command),
                       self.todoComposerFocusRequest == focusRequest + 1
@@ -2962,8 +4297,8 @@ final class PanelController: ObservableObject {
                 guard self.todoComposerIsFocused else {
                     throw SmokeError("Expected the Todo composer to become first responder.")
                 }
-                let todoInputFocusMorphURL = try self.capturePNG(
-                    named: "iagent-todo-input-focus-morph.png"
+                let todoInputRefocusedURL = try self.capturePNG(
+                    named: "iagent-todo-input-refocused.png"
                 )
                 try await Task.sleep(for: .milliseconds(80))
                 let todoInputFocusedURL = try self.capturePNG(named: "iagent-todo-input-focused.png")
@@ -3295,6 +4630,27 @@ final class PanelController: ObservableObject {
                     throw SmokeError("Expected multiline underline to render each physical line without literal tags.")
                 }
 
+                self.editorBody = "First\nSecond"
+                try await Task.sleep(for: .milliseconds(140))
+                noteTextView.setSelectedRange(NSRange(location: 0, length: 12))
+                NoteEditorFormatting.applyOrderedList()
+                try await Task.sleep(for: .milliseconds(180))
+                guard self.editorBody == "1. First\n1. Second",
+                      noteTextView.selectedRange() == NSRange(location: 3, length: 15)
+                else {
+                    throw SmokeError("Expected numbered-list formatting to apply to every selected line.")
+                }
+                NoteEditorFormatting.applyOrderedList()
+                try await Task.sleep(for: .milliseconds(180))
+                guard self.editorBody == "First\nSecond",
+                      noteTextView.selectedRange() == NSRange(location: 0, length: 12)
+                else {
+                    throw SmokeError(
+                        "Expected a second numbered-list action to remove list formatting. "
+                            + "body=\(self.editorBody.debugDescription) selection=\(noteTextView.selectedRange())"
+                    )
+                }
+
                 self.editorBody = ""
                 try await Task.sleep(for: .milliseconds(140))
                 noteTextView.setSelectedRange(NSRange(location: 0, length: 0))
@@ -3446,6 +4802,16 @@ final class PanelController: ObservableObject {
                     throw SmokeError("Expected exact Markdown round-tripping in the isolated smoke library.")
                 }
 
+                self.showNotes()
+                try await Task.sleep(for: .milliseconds(220))
+                guard self.contentMode == .notes,
+                      self.panelTitle == "Notes",
+                      self.notes.contains(where: { $0.id == saved.id })
+                else {
+                    throw SmokeError("Expected the Notes destination to list saved Markdown notes.")
+                }
+                let notesListURL = try self.capturePNG(named: "iagent-notes-list.png")
+
                 self.showThreads()
                 try await Task.sleep(for: .milliseconds(380))
                 let restoredThreadFrame = window.frame
@@ -3538,26 +4904,36 @@ final class PanelController: ObservableObject {
 
                 try await Task.sleep(for: .milliseconds(140))
                 let frame = window.frame
-                guard frame.width > PanelMetrics.compactSize.width + 2,
+                let hostingView = window.contentView as? PanelHostingView
+                let hasClosingRamps = hostingView?.renderedContourHasTopRamps() == true
+                let hasClosingContent = hostingView?.renderedTransitionHasVisibleContent(
+                    centerExclusionWidth: PanelMetrics.notchWidth
+                ) == true
+                _ = try? self.capturePNG(named: "iagent-native-panel-closing.png")
+                guard frame.width > self.compactSize.width + 2,
                       frame.width < PanelMetrics.expandedWidth - 2,
-                      frame.height > PanelMetrics.compactSize.height,
+                      frame.height > self.compactSize.height,
                       frame.height < restoredHomeFrame.height - 16,
                       self.expanded,
-                      !self.compactVisible,
+                      self.compactVisible,
                       abs(frame.maxY - screenFrame.maxY) <= 0.01,
-                      (window.contentView as? PanelHostingView)?.renderedContourHasTopRamps() == true
+                      hasClosingRamps,
+                      hasClosingContent
                 else {
-                    throw SmokeError("Compact animation lost its pinned frame or rendered ramps: \(frame).")
+                    throw SmokeError(
+                        "Compact animation lost its pinned frame, rendered ramps, or content: "
+                            + "frame=\(frame) compact=\(self.compactVisible) "
+                            + "ramps=\(hasClosingRamps) content=\(hasClosingContent)."
+                    )
                 }
-                _ = try? self.capturePNG(named: "iagent-native-panel-closing.png")
 
                 try await Task.sleep(for: .milliseconds(340))
                 let finalFrame = window.frame
                 guard !self.expanded,
                       self.compactVisible,
                       self.contentMode == preservedCompactMode,
-                      abs(finalFrame.width - PanelMetrics.compactSize.width) <= 2,
-                      abs(finalFrame.height - PanelMetrics.compactSize.height) <= 2,
+                      abs(finalFrame.width - self.compactSize.width) <= 2,
+                      abs(finalFrame.height - self.compactSize.height) <= 2,
                       abs(finalFrame.maxY - screenFrame.maxY) <= 0.01,
                       self.calendarService.events.count == 3,
                       self.activeCount > 0,
@@ -3615,14 +4991,54 @@ final class PanelController: ObservableObject {
                       !self.meetingCapture.isActive,
                       let meetingNote = self.lastSavedDocument,
                       meetingNote.title == "Roadmap sync",
+                      meetingNote.body.contains("## Summary"),
                       meetingNote.body.contains("## Transcript"),
+                      meetingNote.body.contains("### Meeting"),
+                      meetingNote.body.contains("### You"),
                       meetingNote.body.contains("revised milestones"),
+                      Set(self.meetingCapture.transcriptSegments.map(\.source)) == [.meeting, .microphone],
                       FileManager.default.fileExists(atPath: meetingNote.fileURL.path)
                 else {
                     throw SmokeError("Expected stopping capture to open the completed local meeting note.")
                 }
-                try await Task.sleep(for: .milliseconds(340))
-                let meetingNoteURL = try self.capturePNG(named: "iagent-meeting-note.png")
+                try await Task.sleep(for: .milliseconds(300))
+                let meetingTranscribingURL = try self.capturePNG(
+                    named: "iagent-meeting-summary-transcribing.png"
+                )
+                try await Task.sleep(for: .milliseconds(220))
+                let meetingGeneratingURL = try self.capturePNG(
+                    named: "iagent-meeting-summary-generating.png"
+                )
+
+                try await Task.sleep(for: .milliseconds(360))
+                let meetingRevealURL = try self.capturePNG(
+                    named: "iagent-meeting-summary-reveal.png"
+                )
+
+                for _ in 0 ..< 180
+                    where self.meetingSummaryState != .ready
+                {
+                    try await Task.sleep(for: .milliseconds(25))
+                }
+                guard self.meetingSummaryState == .ready,
+                      self.editorBody.contains("## Meeting overview"),
+                      self.editorBody.contains("## Next steps")
+                else {
+                    throw SmokeError("Expected the local meeting summary to finish and remain editable.")
+                }
+                try await Task.sleep(for: .milliseconds(260))
+                let meetingNoteURL = try self.capturePNG(named: "iagent-meeting-summary.png")
+
+                self.selectedMeetingNoteTab = .transcript
+                try await Task.sleep(for: .milliseconds(220))
+                guard self.meetingTranscriptSegments.count == 4,
+                      self.selectedMeetingNoteTab == .transcript
+                else {
+                    throw SmokeError("Expected the Transcript tab to preserve both captured audio sources.")
+                }
+                let meetingTranscriptURL = try self.capturePNG(
+                    named: "iagent-meeting-transcript.png"
+                )
 
                 self.showHome()
                 self.setCompact(source: "smoke-meeting-reset", animated: false)
@@ -3632,12 +5048,15 @@ final class PanelController: ObservableObject {
                 let openingFrame = window.frame
                 guard self.expanded,
                       !self.compactVisible,
-                      openingFrame.width > PanelMetrics.compactSize.width + 2,
+                      openingFrame.width > self.compactSize.width + 2,
                       openingFrame.width < PanelMetrics.expandedWidth - 2,
-                      openingFrame.height > PanelMetrics.compactSize.height,
+                      openingFrame.height > self.compactSize.height,
                       openingFrame.height < self.expandedSize.height,
                       abs(openingFrame.maxY - screenFrame.maxY) <= 0.01,
-                      (window.contentView as? PanelHostingView)?.renderedContourHasTopRamps() == true
+                      (window.contentView as? PanelHostingView)?.renderedContourHasTopRamps() == true,
+                      (window.contentView as? PanelHostingView)?.renderedTransitionHasVisibleContent(
+                          centerExclusionWidth: PanelMetrics.notchWidth
+                      ) == true
                 else {
                     throw SmokeError("Expanded transition did not preserve its intermediate frame and rendered ramps.")
                 }
@@ -3666,7 +5085,146 @@ final class PanelController: ObservableObject {
                 }
                 self.setExpanded(false, source: "smoke-finish", animated: false)
 
+                func isCenteredAndTopPinned(_ frame: NSRect) -> Bool {
+                    abs(frame.midX - screenFrame.midX) <= 0.5
+                        && abs(frame.maxY - screenFrame.maxY) <= 0.5
+                }
+
+                @MainActor
+                func isAtHiddenAnchor(_ frame: NSRect) -> Bool {
+                    abs(frame.width - 1) <= 0.01
+                }
+
+                // Reverse a hide in flight. Retargeting must preserve the exact current
+                // geometry and stale hide completions must never order the panel out.
+                self.togglePanelVisibility()
+                try await Task.sleep(for: .milliseconds(80))
+                let interruptedHideFrame = window.frame
+                guard self.isPanelHidden,
+                      interruptedHideFrame.width > 0,
+                      interruptedHideFrame.width < self.compactSize.width,
+                      isCenteredAndTopPinned(interruptedHideFrame)
+                else {
+                    throw SmokeError("Option-M did not begin a centered compact-to-notch collapse.")
+                }
+                self.togglePanelVisibility()
+                let reversalFrame = window.frame
+                guard abs(reversalFrame.width - interruptedHideFrame.width) <= 1,
+                      !self.isPanelHidden
+                else {
+                    throw SmokeError("Reversing Option-M restarted instead of retargeting current geometry.")
+                }
+                try await Task.sleep(for: .milliseconds(330))
+                guard window.isVisible,
+                      !self.isPanelHidden,
+                      !self.expanded,
+                      self.compactVisible,
+                      abs(window.frame.width - self.compactSize.width) <= 1,
+                      isCenteredAndTopPinned(window.frame)
+                else {
+                    throw SmokeError("Interrupted Option-M did not settle back to compact.")
+                }
+
+                // A completed hide collapses to one AppKit point at the notch before ordering out.
+                self.togglePanelVisibility()
+                try await Task.sleep(for: .milliseconds(330))
+                guard self.isPanelHidden,
+                      !window.isVisible,
+                      window.alphaValue <= 0.001,
+                      isAtHiddenAnchor(window.frame),
+                      isCenteredAndTopPinned(window.frame)
+                else {
+                    throw SmokeError("Option-M did not finish at the centered one-point notch anchor.")
+                }
+
+                // Option-M restores the last visible state directly from the hidden anchor.
+                self.togglePanelVisibility()
+                guard window.isVisible,
+                      !self.isPanelHidden,
+                      !self.expanded,
+                      self.compactVisible,
+                      isAtHiddenAnchor(window.frame)
+                else {
+                    throw SmokeError("Hidden Option-M flashed a settled compact frame before revealing.")
+                }
+                try await Task.sleep(for: .milliseconds(80))
+                let compactRevealFrame = window.frame
+                guard compactRevealFrame.width > 0,
+                      compactRevealFrame.width < self.compactSize.width,
+                      isCenteredAndTopPinned(compactRevealFrame)
+                else {
+                    throw SmokeError("Hidden Option-M did not reveal compact from the notch center.")
+                }
+                try await Task.sleep(for: .milliseconds(280))
+                guard abs(window.frame.width - self.compactSize.width) <= 1 else {
+                    throw SmokeError("Option-M compact restoration did not settle.")
+                }
+
+                // Preserve expanded state through a complete Option-M hide/show cycle.
+                let preservedVisibilityMode = self.contentMode
+                self.setExpanded(true, source: "smoke-visibility-expanded", animated: false)
+                let visibilityExpandedSize = self.expandedSize
+                self.togglePanelVisibility()
+                try await Task.sleep(for: .milliseconds(330))
+                guard self.isPanelHidden,
+                      !window.isVisible,
+                      isAtHiddenAnchor(window.frame)
+                else {
+                    throw SmokeError("Expanded Option-M did not collapse completely.")
+                }
+                self.togglePanelVisibility()
+                guard self.expanded,
+                      !self.compactVisible,
+                      self.contentVisible,
+                      self.contentMode == preservedVisibilityMode,
+                      isAtHiddenAnchor(window.frame)
+                else {
+                    throw SmokeError("Option-M did not restore expanded content directly from the notch anchor.")
+                }
+                try await Task.sleep(for: .milliseconds(360))
+                guard abs(window.frame.width - visibilityExpandedSize.width) <= 1,
+                      abs(window.frame.height - visibilityExpandedSize.height) <= 1,
+                      isCenteredAndTopPinned(window.frame)
+                else {
+                    throw SmokeError("Option-M expanded restoration did not settle.")
+                }
+
+                // Reproduce the reported path: hide compact, then use Option-Space. The
+                // expanded surface must be mounted while the window is still at the hidden anchor.
+                self.setCompact(source: "smoke-option-space-hidden", animated: false)
+                self.togglePanelVisibility()
+                try await Task.sleep(for: .milliseconds(330))
+                self.toggleFromGlobalHotKey()
+                guard self.expanded,
+                      !self.compactVisible,
+                      self.contentVisible,
+                      window.isVisible,
+                      isAtHiddenAnchor(window.frame)
+                else {
+                    throw SmokeError("Hidden Option-Space flashed compact before mounting expanded.")
+                }
+                try await Task.sleep(for: .milliseconds(80))
+                let optionSpaceRevealFrame = window.frame
+                guard optionSpaceRevealFrame.width > 0,
+                      optionSpaceRevealFrame.width < PanelMetrics.expandedWidth,
+                      optionSpaceRevealFrame.height > self.closedPanelHeight,
+                      optionSpaceRevealFrame.height < self.expandedSize.height,
+                      isCenteredAndTopPinned(optionSpaceRevealFrame)
+                else {
+                    throw SmokeError("Hidden Option-Space did not animate out of the notch.")
+                }
+                try await Task.sleep(for: .milliseconds(280))
+                guard self.expanded,
+                      !self.isPanelHidden,
+                      abs(window.frame.width - self.expandedSize.width) <= 1,
+                      abs(window.frame.height - self.expandedSize.height) <= 1
+                else {
+                    throw SmokeError("Hidden Option-Space did not settle expanded.")
+                }
+                self.setCompact(source: "smoke-finish", animated: false)
+
                 print("[smoke] nativeNotch=\(Int(collapsedFrame.width))x\(Int(collapsedFrame.height)) top=\(Int(collapsedFrame.maxY))")
+                print("[smoke] visibilityMotion=compact/expanded/interrupt/option-space one-point-anchor")
                 print("[smoke] nativeExpanded=\(Int(expandedFrame.width))x\(Int(expandedFrame.height)) top=\(Int(expandedFrame.maxY)) source=\(self.lastOpenSource) wheelEvent=\(wheelEventReachedHandler)")
                 print("[smoke] dynamicHeights=threads:\(Int(restoredThreadFrame.height)) home:\(Int(homeFrame.height)) calendar:\(Int(calendarFrame.height)) create:\(Int(createFrame.height)) todo:\(Int(todoFrame.height)) focus:\(Int(focusFrame.height)) note:\(Int(noteFrame.height))")
                 print("[smoke] realRootThreads=\(self.threads.count) activity24h=\(self.activityThreads.count) projects=\(self.projectSections.count) running=\(self.activeCount) keyboard=up/down/enter/escape database=\(self.databasePath)")
@@ -3676,7 +5234,11 @@ final class PanelController: ObservableObject {
                 print("[smoke] compactScreenshot=\(compactURL.path)")
                 print("[smoke] meetingErrorScreenshot=\(meetingErrorURL.path)")
                 print("[smoke] meetingListeningScreenshot=\(meetingListeningURL.path)")
+                print("[smoke] meetingTranscribingScreenshot=\(meetingTranscribingURL.path)")
+                print("[smoke] meetingGeneratingScreenshot=\(meetingGeneratingURL.path)")
+                print("[smoke] meetingRevealScreenshot=\(meetingRevealURL.path)")
                 print("[smoke] meetingNoteScreenshot=\(meetingNoteURL.path)")
+                print("[smoke] meetingTranscriptScreenshot=\(meetingTranscriptURL.path)")
                 print("[smoke] openingScreenshot=\(openingURL.path)")
                 print("[smoke] expandedScreenshot=\(expandedURL.path)")
                 print("[smoke] projectRowsScreenshot=\(projectRowsURL.path)")
@@ -3684,8 +5246,8 @@ final class PanelController: ObservableObject {
                 print("[smoke] createScreenshot=\(createURL.path)")
                 print("[smoke] standaloneMeetingScreenshot=\(standaloneMeetingURL.path)")
                 print("[smoke] createBottomScreenshot=\(createBottomURL.path)")
-                print("[smoke] todoInputIdleScreenshot=\(todoInputIdleURL.path)")
-                print("[smoke] todoInputFocusMorphScreenshot=\(todoInputFocusMorphURL.path)")
+                print("[smoke] todoInputAutoFocusedScreenshot=\(todoInputAutoFocusedURL.path)")
+                print("[smoke] todoInputRefocusedScreenshot=\(todoInputRefocusedURL.path)")
                 print("[smoke] todoInputFocusedScreenshot=\(todoInputFocusedURL.path)")
                 print("[smoke] todoAddTransitionScreenshot=\(todoAddTransitionURL.path)")
                 print("[smoke] todoAddSettledScreenshot=\(todoAddSettledURL.path)")
@@ -3708,6 +5270,7 @@ final class PanelController: ObservableObject {
                 print("[smoke] noteToolbarScreenshot=\(noteToolbarURL.path)")
                 print("[smoke] markdownEditorScreenshot=\(markdownEditorURL.path)")
                 print("[smoke] noteDictationScreenshot=\(noteURL.path)")
+                print("[smoke] notesListScreenshot=\(notesListURL.path)")
                 NSApp.terminate(nil)
             } catch {
                 self.failSmoke(String(describing: error))
@@ -3802,21 +5365,53 @@ struct PanelView: View {
     @ObservedObject var controller: PanelController
 
     var body: some View {
-        ZStack(alignment: .top) {
-            Color.black
-                .allowsHitTesting(false)
+        GeometryReader { geometry in
+            ZStack {
+                Color.black
+                    .allowsHitTesting(false)
 
-            if controller.expanded {
-                ExpandedPanel(controller: controller)
-            } else if controller.compactVisible {
+                if controller.expanded {
+                    ExpandedPanel(controller: controller)
+                        .frame(
+                            width: controller.expandedSize.width,
+                            height: controller.expandedSize.height,
+                            alignment: .top
+                        )
+                        .position(
+                            x: geometry.size.width / 2,
+                            y: controller.expandedSize.height / 2
+                        )
+                        .transition(.opacity)
+                }
+
                 CompactPanel(controller: controller)
-                    .frame(width: PanelMetrics.compactSize.width, height: PanelMetrics.compactSize.height)
-            } else {
+                    .frame(width: controller.compactSize.width, height: controller.compactSize.height)
+                    .position(
+                        x: geometry.size.width / 2,
+                        y: controller.compactSize.height / 2
+                    )
+                    .opacity(controller.compactVisible ? 1 : 0)
+                    .allowsHitTesting(controller.compactVisible)
+                    .accessibilityHidden(!controller.compactVisible)
+                    .zIndex(1)
+
                 NotchTrigger(controller: controller)
-                    .frame(width: PanelMetrics.notchSize.width, height: PanelMetrics.notchSize.height)
+                    .frame(width: controller.notchSize.width, height: controller.notchSize.height)
+                    .position(
+                        x: geometry.size.width / 2,
+                        y: controller.notchSize.height / 2
+                    )
+                    .opacity(notchVisible ? 1 : 0)
+                    .allowsHitTesting(notchVisible)
+                    .accessibilityHidden(!notchVisible)
+                    .zIndex(1)
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var notchVisible: Bool {
+        !controller.compactVisible && (!controller.expanded || !controller.contentVisible)
     }
 }
 
@@ -3854,7 +5449,7 @@ struct CompactPanel: View {
                 .frame(maxHeight: .infinity, alignment: .top)
                 .allowsHitTesting(false)
         }
-        .frame(width: PanelMetrics.compactSize.width, height: PanelMetrics.compactSize.height)
+        .frame(width: controller.compactSize.width, height: controller.compactSize.height)
     }
 
     private var idleStatus: some View {
@@ -3873,6 +5468,8 @@ struct CompactPanel: View {
                         .foregroundStyle(.white.opacity(0.76))
                         .frame(width: 14, height: 14)
                 }
+
+                compactMessagesButton
 
                 compactMetric(
                     count: controller.activeCount,
@@ -3903,12 +5500,13 @@ struct CompactPanel: View {
 
             Spacer(minLength: 20)
 
-            HStack(spacing: 14) {
+            HStack(spacing: compactEventActionSpacing) {
                 if let event = controller.compactCalendarEvent {
                     compactEvent(event)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
 
-                HStack(spacing: 0) {
+                HStack(spacing: compactIconActionSpacing) {
                     Button {
                         controller.showCreationMenu()
                         controller.setExpanded(true, source: "compact-create")
@@ -3917,7 +5515,7 @@ struct CompactPanel: View {
                             .font(.system(size: 13, weight: .semibold))
                             .frame(width: 14, height: 14)
                     }
-                    .buttonStyle(HeaderIconButtonStyle(isActive: false))
+                    .buttonStyle(HeaderIconButtonStyle(isActive: false, size: compactControlHeight))
                     .help("Create")
 
                     Button {
@@ -3927,20 +5525,21 @@ struct CompactPanel: View {
                             .font(.system(size: 11, weight: .semibold))
                             .frame(width: 14, height: 14)
                     }
-                    .buttonStyle(HeaderIconButtonStyle(isActive: false))
+                    .buttonStyle(HeaderIconButtonStyle(isActive: false, size: compactControlHeight))
                     .help("Expand panel")
                 }
             }
+            .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.leading, PanelMetrics.expandedRampWidth + 20)
-        .padding(.trailing, PanelMetrics.expandedRampWidth + 10)
-        .frame(height: PanelMetrics.compactSize.height)
+        .padding(.trailing, compactActionTrailingInset)
+        .frame(height: controller.closedPanelHeight)
     }
 
     private var meetingStatus: some View {
         HStack(spacing: 0) {
             HStack(spacing: 8) {
-                Text(meetingCapture.isActive ? meetingCapture.latestSource.rawValue.uppercased() : "ERROR")
+                Text(meetingStatusLabel)
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.34))
                     .frame(width: 36, alignment: .leading)
@@ -3954,11 +5553,11 @@ struct CompactPanel: View {
             }
             .padding(.leading, PanelMetrics.expandedRampWidth + 20)
             .padding(.trailing, 8)
-            .frame(width: compactSideWidth, height: PanelMetrics.compactSize.height)
+            .frame(width: compactSideWidth, height: controller.closedPanelHeight)
             .clipped()
 
             Color.clear
-                .frame(width: PanelMetrics.notchSize.width)
+                .frame(width: PanelMetrics.notchWidth)
                 .allowsHitTesting(false)
 
             HStack(spacing: 8) {
@@ -3973,48 +5572,128 @@ struct CompactPanel: View {
                 )
 
                 WaveformView(levels: meetingCapture.levels, color: .white)
-                    .frame(width: 104, height: 18)
+                    .frame(width: 52, height: 18)
 
                 Button {
-                    if meetingCapture.isActive {
+                    if meetingCapture.isPreparing {
+                        controller.cancelMeetingCapturePreparation()
+                    } else if meetingCapture.canStop {
                         controller.stopMeetingCapture()
                     } else {
                         controller.dismissMeetingCaptureFailure()
                     }
                 } label: {
-                    Circle()
-                        .fill(Color.agentCoral)
-                        .frame(width: 8, height: 8)
-                        .overlay {
-                            Circle()
-                                .stroke(.white.opacity(0.28), lineWidth: 0.5)
-                        }
-                        .frame(width: 14, height: 14)
+                    meetingStatusActionIcon
                 }
-                .buttonStyle(HeaderIconButtonStyle(isActive: false))
+                .buttonStyle(HeaderIconButtonStyle(isActive: false, size: compactControlHeight))
                 .disabled(meetingCapture.state == .stopping)
-                .help(meetingCapture.isActive ? "Stop and open meeting note" : "Dismiss recording error")
+                .help(meetingStatusActionHelp)
             }
             .padding(.leading, 8)
             .padding(.trailing, PanelMetrics.expandedRampWidth + 10)
-            .frame(width: compactSideWidth, height: PanelMetrics.compactSize.height)
+            .frame(width: compactSideWidth, height: controller.closedPanelHeight)
         }
-        .frame(width: PanelMetrics.compactSize.width)
-        .frame(height: PanelMetrics.compactSize.height)
+        .frame(width: PanelMetrics.compactWidth)
+        .frame(height: controller.closedPanelHeight)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(
-            meetingCapture.isActive
-                ? "Recording \(meetingCapture.currentEvent?.title ?? "meeting")"
-                : "Meeting recording error"
-        )
+        .accessibilityLabel(meetingStatusAccessibilityLabel)
+    }
+
+    private var meetingStatusLabel: String {
+        switch meetingCapture.state {
+        case .preparing: "PREP"
+        case .listening: meetingCapture.latestSource.compactLabel.uppercased()
+        case .stopping: "SAVE"
+        case .failed: "ERROR"
+        case .idle: "IDLE"
+        }
+    }
+
+    @ViewBuilder
+    private var meetingStatusActionIcon: some View {
+        switch meetingCapture.state {
+        case .preparing:
+            ProgressView()
+                .controlSize(.mini)
+                .tint(.white.opacity(0.62))
+                .frame(width: 14, height: 14)
+        case .listening:
+            Circle()
+                .fill(Color.agentCoral)
+                .frame(width: 8, height: 8)
+                .overlay {
+                    Circle()
+                        .stroke(.white.opacity(0.28), lineWidth: 0.5)
+                }
+                .frame(width: 14, height: 14)
+        case .stopping:
+            ProgressView()
+                .controlSize(.mini)
+                .tint(.white.opacity(0.62))
+                .frame(width: 14, height: 14)
+        case .failed, .idle:
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .semibold))
+                .frame(width: 14, height: 14)
+        }
+    }
+
+    private var meetingStatusActionHelp: String {
+        switch meetingCapture.state {
+        case .preparing: "Cancel meeting recorder setup"
+        case .listening: "Stop and open meeting note"
+        case .stopping: "Finishing meeting note"
+        case .failed: "Dismiss recording error"
+        case .idle: "Meeting recorder"
+        }
+    }
+
+    private var meetingStatusAccessibilityLabel: String {
+        switch meetingCapture.state {
+        case .preparing:
+            "Preparing to record \(meetingCapture.currentEvent?.title ?? "meeting")"
+        case .listening:
+            "Recording \(meetingCapture.currentEvent?.title ?? "meeting")"
+        case .stopping:
+            "Finishing meeting recording"
+        case .failed:
+            "Meeting recording error"
+        case .idle:
+            "Meeting recorder"
+        }
     }
 
     private var compactSideWidth: CGFloat {
-        (PanelMetrics.compactSize.width - PanelMetrics.notchSize.width) / 2
+        (PanelMetrics.compactWidth - PanelMetrics.notchWidth) / 2
+    }
+
+    private var compactControlHeight: CGFloat {
+        min(28, max(20, controller.closedPanelHeight - 4))
+    }
+
+    private var compactActionButtonInset: CGFloat {
+        (compactControlHeight - 14) / 2
+    }
+
+    // Equalize visible glyph gaps while preserving full 28pt button targets.
+    private var compactActionVisibleGap: CGFloat { 21 }
+
+    private var compactEventActionSpacing: CGFloat {
+        max(0, compactActionVisibleGap - compactActionButtonInset)
+    }
+
+    private var compactIconActionSpacing: CGFloat {
+        max(0, compactActionVisibleGap - 2 * compactActionButtonInset)
+    }
+
+    private var compactActionTrailingInset: CGFloat {
+        PanelMetrics.expandedRampWidth + 20 - compactActionButtonInset
     }
 
     private func compactEvent(_ event: CalendarEventItem) -> some View {
-        HStack(spacing: 3) {
+        let timeText = compactEventTimeText(event)
+
+        return HStack(spacing: 1) {
             if !event.isAllDay {
                 Button {
                     controller.startMeetingCapture(event)
@@ -4022,7 +5701,7 @@ struct CompactPanel: View {
                     Circle()
                         .fill(Color.agentCoral)
                         .frame(width: 7, height: 7)
-                        .frame(width: 12, height: 28)
+                        .frame(width: 12, height: compactControlHeight)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -4034,20 +5713,39 @@ struct CompactPanel: View {
                 controller.openCalendarFromCompactTime()
             } label: {
                 NumberFlowText(
-                    event.timeText(),
-                    fontSize: 10,
+                    timeText,
+                    fontSize: timeText.count > 5 ? 9 : 10,
                     weight: .medium,
                     color: .white.opacity(0.44),
-                    reservedWidth: 58,
-                    alignment: .leading,
+                    alignment: .trailing,
                     lineHeight: 14
                 )
-                .frame(height: 28)
+                .frame(height: compactControlHeight)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help(event.title)
         }
+    }
+
+    private func compactEventTimeText(_ event: CalendarEventItem) -> String {
+        guard !event.isAllDay else { return "All" }
+
+        let hourFormat = DateFormatter.dateFormat(
+            fromTemplate: "j",
+            options: 0,
+            locale: .current
+        ) ?? ""
+        guard hourFormat.contains("a") else { return event.timeText() }
+
+        let components = Calendar.autoupdatingCurrent.dateComponents(
+            [.hour, .minute],
+            from: event.startDate
+        )
+        let hour = components.hour ?? 0
+        let minute = components.minute ?? 0
+        let compactHour = hour % 12 == 0 ? 12 : hour % 12
+        return String(format: "%d:%02d%@", compactHour, minute, hour < 12 ? "a" : "p")
     }
 
     private func compactMetric<Icon: View>(
@@ -4070,11 +5768,28 @@ struct CompactPanel: View {
                     lineHeight: 14
                 )
             }
-            .frame(height: 28)
+            .frame(height: compactControlHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(help)
+    }
+
+    private var compactMessagesButton: some View {
+        let unread = controller.unreadMessageConversationCount
+        return compactMetric(
+            count: unread,
+            help: unread == 0 ? "Messages — all read" : "Messages — \(unread) unread",
+            action: {
+                controller.showMessages()
+                controller.setExpanded(true, source: "compact-messages")
+            }
+        ) {
+            MessageCircleIcon(size: 13, color: .white.opacity(0.76))
+                .frame(width: 14, height: 14)
+        }
+        .accessibilityLabel("Messages")
+        .accessibilityValue(unread == 0 ? "All read" : "\(unread) unread")
     }
 }
 
@@ -4099,7 +5814,7 @@ struct NotchTrigger: View {
                 onHover: { _ in }
             )
         }
-        .frame(width: PanelMetrics.notchSize.width, height: PanelMetrics.notchSize.height)
+        .frame(width: PanelMetrics.notchWidth, height: controller.closedPanelHeight)
         .contentShape(Rectangle())
         .onTapGesture {
             controller.setExpanded(true, source: "click")
@@ -4123,23 +5838,34 @@ struct ExpandedPanel: View {
             VStack(spacing: 0) {
                 header
 
-                panelContent
-                    .id(controller.contentMode)
-                    .transition(.opacity)
+                ZStack(alignment: .top) {
+                    panelContent
+                        .id(controller.contentMode)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .transition(.opacity.animation(screenTransitionAnimation))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
             .padding(.leading, PanelMetrics.expandedRampWidth)
             .padding(.trailing, PanelMetrics.expandedRampWidth)
             .opacity(controller.contentVisible ? 1 : 0)
-            .animation(
-                .timingCurve(0.165, 0.84, 0.44, 1, duration: 0.14),
-                value: controller.contentMode
-            )
 
             CameraDot()
                 .frame(width: 11, height: 11)
                 .padding(.top, 5)
+                .opacity(controller.contentVisible ? 1 : 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var screenTransitionAnimation: Animation {
+        .timingCurve(
+            PanelMetrics.transitionX1,
+            PanelMetrics.transitionY1,
+            PanelMetrics.transitionX2,
+            PanelMetrics.transitionY2,
+            duration: PanelMetrics.contentTransitionDuration
+        )
     }
 
     @ViewBuilder
@@ -4153,6 +5879,13 @@ struct ExpandedPanel: View {
             } else {
                 threadList
             }
+        case .notes:
+            NotesListView(controller: controller)
+        case .messages:
+            MessageInboxView(
+                controller: controller,
+                filter: controller.messageInboxFilter
+            )
         case .create:
             CreationMenuView(controller: controller)
         case .note:
@@ -4169,23 +5902,61 @@ struct ExpandedPanel: View {
     }
 
     private var header: some View {
-        HStack(spacing: 14) {
-            if controller.contentMode != .home {
+        PanelPageHeader(
+            title: controller.panelTitle,
+            titleRole: headerTitleRole,
+            placement: controller.contentMode == .home ? .root : .navigation,
+            onBack: headerBackAction,
+            backHelp: "Back to Home"
+        ) {
+            if controller.contentMode == .messages {
+                messageHeaderFilterButton(
+                    filter: .awaitingReply,
+                    count: controller.awaitingReplyConversationCount,
+                    label: "awaiting",
+                    color: .agentAmber
+                )
+
+                messageHeaderFilterButton(
+                    filter: .unread,
+                    count: controller.unreadMessageConversationCount,
+                    label: controller.unreadMessageConversationCount == 0 ? "all read" : "unread",
+                    color: .agentCoral,
+                    showsCount: controller.unreadMessageConversationCount > 0
+                )
+
                 Button {
-                    controller.returnHome()
+                    controller.syncNow()
                 } label: {
-                    Image(systemName: "chevron.left")
+                    MessageSyncHealthView(
+                        isSyncing: controller.isMessageInboxSyncing,
+                        status: controller.cloudSyncStatus,
+                        access: controller.messageProviderAccess
+                    )
+                }
+                .buttonStyle(.plain)
+                .panelTooltip(text: controller.cloudSyncHelpText)
+                .accessibilityLabel("Sync messages. \(controller.cloudSyncHelpText)")
+            } else {
+                Button {
+                    controller.syncNow()
+                } label: {
+                    ZStack(alignment: .bottomTrailing) {
+                        Image(systemName: "icloud")
+
+                        Circle()
+                            .fill(syncStatusColor)
+                            .frame(width: 5, height: 5)
+                            .overlay {
+                                Circle().stroke(Color.black.opacity(0.7), lineWidth: 1)
+                            }
+                    }
+                    .frame(width: 14, height: 14)
                 }
                 .buttonStyle(HeaderIconButtonStyle(isActive: false))
-                .help("Back to Home")
+                .help(controller.cloudSyncHelpText)
+                .accessibilityLabel(controller.cloudSyncHelpText)
             }
-
-            Text(controller.panelTitle)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.96))
-                .lineLimit(1)
-
-            Spacer(minLength: 64)
 
             if controller.contentMode == .threads {
                 HStack(spacing: 6) {
@@ -4217,6 +5988,16 @@ struct ExpandedPanel: View {
                 .help("Create")
             }
 
+            if controller.contentMode == .notes {
+                Button {
+                    controller.openNewNote(source: "notes-header")
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(HeaderIconButtonStyle(isActive: false))
+                .help("New note")
+            }
+
             if controller.contentMode == .todo {
                 Button {
                     controller.toggleTodoHistory()
@@ -4235,11 +6016,87 @@ struct ExpandedPanel: View {
             .buttonStyle(HeaderIconButtonStyle(isActive: false))
             .help("Collapse panel")
         }
-        .padding(.leading, controller.contentMode == .home ? 20 : 6)
-        .padding(.trailing, 10)
-        .frame(height: PanelMetrics.headerHeight)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(.white.opacity(0.09)).frame(height: 1)
+    }
+
+    private var headerBackAction: (() -> Void)? {
+        guard controller.contentMode != .home,
+              !(controller.contentMode == .messages
+                && controller.selectedMessageConversationID != nil)
+        else {
+            return nil
+        }
+
+        return {
+            if controller.contentMode == .messages {
+                controller.navigateBackFromMessages()
+            } else {
+                controller.returnHome()
+            }
+        }
+    }
+
+    private var headerTitleRole: PanelPageTitleRole {
+        switch controller.contentMode {
+        case .home:
+            .home
+        case .messages:
+            .messages
+        default:
+            .page
+        }
+    }
+
+    private func messageHeaderFilterButton(
+        filter: MessageInboxFilter,
+        count: Int,
+        label: String,
+        color: Color,
+        showsCount: Bool = true
+    ) -> some View {
+        let isActive = controller.messageInboxFilter == filter
+        return Button {
+            controller.toggleMessageInboxFilter(filter)
+        } label: {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(count > 0 ? color : Color.white.opacity(0.24))
+                    .frame(width: 6, height: 6)
+
+                Text(showsCount ? "\(count) \(label)" : label)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(isActive ? 0.72 : 0.52))
+                    .monospacedDigit()
+            }
+            .padding(.horizontal, 6)
+            .frame(height: 28)
+            .background(
+                isActive ? Color.white.opacity(0.07) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help(isActive ? "Show all messages" : "Show \(label) messages")
+        .accessibilityLabel(
+            filter == .awaitingReply
+                ? "\(count) conversations awaiting your reply"
+                : "\(count) unread conversations"
+        )
+        .accessibilityValue(isActive ? "Selected" : "Not selected")
+    }
+
+    private var syncStatusColor: Color {
+        switch controller.cloudSyncStatus.phase {
+        case .idle:
+            controller.cloudSyncPendingRecordCount == 0 ? .agentGreen : .agentAmber
+        case .syncing:
+            .agentBlue
+        case .offline:
+            .white.opacity(0.34)
+        case .accountUnavailable:
+            .agentAmber
+        case .failed:
+            .agentCoral
         }
     }
 
@@ -4501,7 +6358,7 @@ struct SectionLabel: View {
             .font(.system(size: 10, weight: .medium))
             .foregroundStyle(.white.opacity(0.4))
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20)
+            .padding(.horizontal, PanelPageLayout.contentInset)
             .frame(height: 30)
     }
 }
@@ -4562,7 +6419,7 @@ struct ProjectSectionRow: View {
                     .help("Drag to reorder project")
             }
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, PanelPageLayout.contentInset)
         .frame(height: 40)
         .background(
             isDragging
@@ -4622,8 +6479,11 @@ struct AgentThreadRow: View {
                 ThreadTrailingMetadata(thread: thread, referenceNow: referenceNow)
             }
         }
-        .padding(.leading, placement == .project ? 50 : 20)
-        .padding(.trailing, 20)
+        .padding(
+            .leading,
+            placement == .project ? 50 : PanelPageLayout.contentInset
+        )
+        .padding(.trailing, PanelPageLayout.contentInset)
         .frame(height: 36)
         .background(.white.opacity(isSelected ? 0.065 : (hovering ? 0.035 : 0)))
         .onHover { hovering = $0 }
@@ -4750,35 +6610,44 @@ struct ExpandedPanelBackground: View {
 
 struct PanelContourShape: Shape {
     func path(in rect: CGRect) -> Path {
-        let widthRange = PanelMetrics.expandedWidth - PanelMetrics.notchSize.width
+        let widthRange = PanelMetrics.expandedWidth - PanelMetrics.notchWidth
         let expansion = min(
             1,
-            max(0, (rect.width - PanelMetrics.notchSize.width) / widthRange)
+            max(0, (rect.width - PanelMetrics.notchWidth) / widthRange)
         )
-        let rampWidth = PanelMetrics.expandedRampWidth
-        let rampDepth = min(PanelMetrics.expandedRampDepth, rect.height / 2)
+        let rampRadius = min(
+            PanelMetrics.expandedRampWidth,
+            PanelMetrics.expandedRampDepth,
+            rect.width / 2,
+            rect.height / 2
+        )
         let bottomRadius = min(
             20 + 4 * expansion,
             rect.width / 2,
-            max(0, rect.height - rampDepth)
+            max(0, rect.height - rampRadius)
         )
-        let topY = rect.minY - PanelMetrics.topMaskOverscan
-        let leftBodyX = rect.minX + rampWidth
-        let rightBodyX = rect.maxX - rampWidth
+        let maskTopY = rect.minY - PanelMetrics.topMaskOverscan
+        let curveTopY = rect.minY
+        let rampBottomY = curveTopY + rampRadius
+        let leftBodyX = rect.minX + rampRadius
+        let rightBodyX = rect.maxX - rampRadius
+        // Standard cubic approximation for a circle quadrant (maximum error < 0.03%).
+        let quarterCircleKappa: CGFloat = 0.552_284_749_8
         var path = Path()
 
-        path.move(to: CGPoint(x: rect.minX, y: topY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: topY))
+        path.move(to: CGPoint(x: rect.minX, y: maskTopY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: maskTopY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: curveTopY))
 
         path.addCurve(
-            to: CGPoint(x: rightBodyX, y: rect.minY + rampDepth),
+            to: CGPoint(x: rightBodyX, y: rampBottomY),
             control1: CGPoint(
-                x: rect.maxX - rampWidth * 0.4,
-                y: topY
+                x: rect.maxX - rampRadius * quarterCircleKappa,
+                y: curveTopY
             ),
             control2: CGPoint(
                 x: rightBodyX,
-                y: rect.minY + rampDepth * 0.4
+                y: rampBottomY - rampRadius * quarterCircleKappa
             )
         )
 
@@ -4792,19 +6661,20 @@ struct PanelContourShape: Shape {
             to: CGPoint(x: leftBodyX, y: rect.maxY - bottomRadius),
             control: CGPoint(x: leftBodyX, y: rect.maxY)
         )
-        path.addLine(to: CGPoint(x: leftBodyX, y: rect.minY + rampDepth))
+        path.addLine(to: CGPoint(x: leftBodyX, y: rampBottomY))
 
         path.addCurve(
-            to: CGPoint(x: rect.minX, y: topY),
+            to: CGPoint(x: rect.minX, y: curveTopY),
             control1: CGPoint(
-                x: rect.minX + rampWidth,
-                y: rect.minY + rampDepth * 0.4
+                x: leftBodyX,
+                y: rampBottomY - rampRadius * quarterCircleKappa
             ),
             control2: CGPoint(
-                x: rect.minX + rampWidth * 0.4,
-                y: topY
+                x: rect.minX + rampRadius * quarterCircleKappa,
+                y: curveTopY
             )
         )
+        path.addLine(to: CGPoint(x: rect.minX, y: maskTopY))
 
         path.closeSubpath()
         return path
@@ -4891,7 +6761,8 @@ extension Color {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let controller = PanelController()
+    private var controller: PanelController!
+    private var panelWindow: PanelWindow?
     private var screenObserver: NSObjectProtocol?
     private var globalNotchMonitor: Any?
     private var keyboardMonitor: Any?
@@ -4899,11 +6770,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var dictationHotKey: GlobalHotKey?
     private var newNoteHotKey: GlobalHotKey?
     private var visibilityHotKey: GlobalHotKey?
+    private var automaticTerminationDisabled = false
+    private var terminationTask: Task<Void, Never>?
+
+    private static let automaticTerminationReason =
+        "iAgent global shortcuts must remain available while its panel is hidden."
 
     func applicationDidFinishLaunching(_: Notification) {
         let isSmokeTest = CommandLine.arguments.contains("--smoke-test")
         let isCalendarLiveTest = CommandLine.arguments.contains("--calendar-live-test")
+        let isVisibilityLifecycleTest = CommandLine.arguments.contains(
+            "--visibility-lifecycle-test"
+        )
+        if deferToExistingInstanceIfNeeded(
+            isTestRun: isSmokeTest || isCalendarLiveTest || isVisibilityLifecycleTest
+        ) {
+            return
+        }
+        ProcessInfo.processInfo.disableAutomaticTermination(Self.automaticTerminationReason)
+        automaticTerminationDisabled = true
         NSApp.setActivationPolicy(isCalendarLiveTest ? .regular : .accessory)
+        if !isSmokeTest && !isCalendarLiveTest && !isVisibilityLifecycleTest {
+            SandboxAccessManager.shared.prepareForLaunch()
+        }
+        controller = PanelController()
         if isCalendarLiveTest {
             NSApp.activate(ignoringOtherApps: true)
         }
@@ -4914,6 +6804,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
+        panelWindow = panel
 
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -4926,6 +6817,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.animationBehavior = .none
+        panel.isReleasedWhenClosed = false
 
         let hostingView = PanelHostingView(
             rootView: AnyView(
@@ -5013,7 +6905,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ),
             ]
         ) { [weak controller] in
-            controller?.hidePanelCompletely()
+            controller?.togglePanelVisibility()
         }
         self.visibilityHotKey = visibilityHotKey
         if let label = visibilityHotKey.register() {
@@ -5033,7 +6925,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return handled ? nil : event
         }
 
-        if !isSmokeTest && !isCalendarLiveTest {
+        if !isSmokeTest && !isCalendarLiveTest && !isVisibilityLifecycleTest {
             globalNotchMonitor = NSEvent.addGlobalMonitorForEvents(
                 matching: [.scrollWheel, .leftMouseDown]
             ) { [weak controller] event in
@@ -5055,11 +6947,213 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             controller.runSmokeTest()
         } else if isCalendarLiveTest {
             controller.runCalendarLiveTest()
+        } else if isVisibilityLifecycleTest {
+            runVisibilityLifecycleTest(expectedPanelIdentifier: ObjectIdentifier(panel))
         }
     }
 
+    private func runVisibilityLifecycleTest(expectedPanelIdentifier: ObjectIdentifier) {
+        controller.setCompact(source: "visibility-lifecycle-setup", animated: false)
+        let screenFrame = (panelWindow?.screen ?? NSScreen.main)?.frame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+
+        Task { @MainActor [weak self] in
+            guard let self else {
+                fputs("Visibility lifecycle failed: AppDelegate was released.\n", stderr)
+                exit(1)
+            }
+
+            @MainActor
+            func panel(_ phase: String) throws -> PanelWindow {
+                guard let panel = self.panelWindow,
+                      ObjectIdentifier(panel) == expectedPanelIdentifier,
+                      self.controller.window === panel
+                else {
+                    throw SmokeError("Panel ownership was lost during \(phase).")
+                }
+                return panel
+            }
+
+            func isPinned(_ frame: NSRect) -> Bool {
+                abs(frame.midX - screenFrame.midX) <= 0.5
+                    && abs(frame.maxY - screenFrame.maxY) <= 0.5
+            }
+
+            @MainActor
+            func isAnchor(_ panel: PanelWindow) -> Bool {
+                abs(panel.frame.width - 1) <= 0.01
+            }
+
+            do {
+                self.controller.togglePanelVisibility()
+                try await Task.sleep(for: .milliseconds(360))
+                do {
+                    let hiddenPanel = try panel("compact hide")
+                    guard self.controller.isPanelHidden,
+                          !hiddenPanel.isVisible,
+                          hiddenPanel.alphaValue <= 0.001,
+                          hiddenPanel.ignoresMouseEvents,
+                          isAnchor(hiddenPanel),
+                          isPinned(hiddenPanel.frame)
+                    else {
+                        throw SmokeError(
+                            "Compact did not finish hidden at the notch anchor: "
+                                + "hidden=\(self.controller.isPanelHidden) "
+                                + "visible=\(hiddenPanel.isVisible) "
+                                + "alpha=\(hiddenPanel.alphaValue) "
+                                + "ignoresMouse=\(hiddenPanel.ignoresMouseEvents) "
+                                + "frame=\(hiddenPanel.frame) scale=\(hiddenPanel.backingScaleFactor)."
+                        )
+                    }
+                }
+
+                // Leave the production-style panel fully ordered out long enough to expose
+                // weak-window and automatic-termination regressions before the second press.
+                try await Task.sleep(for: .milliseconds(850))
+                _ = try panel("compact hidden dwell")
+
+                self.controller.togglePanelVisibility()
+                do {
+                    let revealSeed = try panel("compact restore seed")
+                    guard !self.controller.isPanelHidden,
+                          revealSeed.isVisible,
+                          revealSeed.alphaValue >= 0.999,
+                          !revealSeed.ignoresMouseEvents,
+                          isAnchor(revealSeed),
+                          isPinned(revealSeed.frame)
+                    else {
+                        throw SmokeError("Second Option-M did not order in the compact reveal seed.")
+                    }
+                }
+
+                try await Task.sleep(for: .milliseconds(80))
+                do {
+                    let revealingPanel = try panel("compact reveal")
+                    guard revealingPanel.frame.width > 1,
+                          revealingPanel.frame.width < self.controller.compactSize.width,
+                          isPinned(revealingPanel.frame)
+                    else {
+                        throw SmokeError("Compact restore did not animate outward from the notch.")
+                    }
+                }
+
+                try await Task.sleep(for: .milliseconds(290))
+                do {
+                    let restoredPanel = try panel("compact settle")
+                    guard restoredPanel.isVisible,
+                          !self.controller.isPanelHidden,
+                          !self.controller.expanded,
+                          self.controller.compactVisible,
+                          abs(restoredPanel.frame.width - self.controller.compactSize.width) <= 1,
+                          restoredPanel.alphaValue >= 0.999
+                    else {
+                        throw SmokeError("Second Option-M did not restore compact state.")
+                    }
+                }
+
+                self.controller.setExpanded(
+                    true,
+                    source: "visibility-lifecycle-expanded",
+                    animated: false
+                )
+                self.controller.togglePanelVisibility()
+                try await Task.sleep(for: .milliseconds(360))
+                do {
+                    let hiddenPanel = try panel("expanded hide")
+                    guard self.controller.isPanelHidden,
+                          !hiddenPanel.isVisible,
+                          isAnchor(hiddenPanel)
+                    else {
+                        throw SmokeError("Expanded state did not finish hidden at the notch anchor.")
+                    }
+                }
+
+                self.controller.togglePanelVisibility()
+                do {
+                    let revealSeed = try panel("expanded restore seed")
+                    guard self.controller.expanded,
+                          self.controller.contentVisible,
+                          revealSeed.isVisible,
+                          isAnchor(revealSeed)
+                    else {
+                        throw SmokeError("Second Option-M did not preserve expanded state.")
+                    }
+                }
+
+                try await Task.sleep(for: .milliseconds(370))
+                do {
+                    let restoredPanel = try panel("expanded settle")
+                    guard !self.controller.isPanelHidden,
+                          self.controller.expanded,
+                          restoredPanel.isVisible,
+                          abs(restoredPanel.frame.width - self.controller.expandedSize.width) <= 1,
+                          abs(restoredPanel.frame.height - self.controller.expandedSize.height) <= 1,
+                          restoredPanel.alphaValue >= 0.999
+                    else {
+                        throw SmokeError("Second Option-M did not restore expanded geometry.")
+                    }
+                }
+
+                print(
+                    "[visibility-lifecycle] option-m=compact+expanded "
+                        + "ownership=retained hiddenDwell=850ms anchor=one-point"
+                )
+                NSApp.terminate(nil)
+            } catch {
+                fputs("Visibility lifecycle failed: \(error)\n", stderr)
+                fflush(stderr)
+                exit(1)
+            }
+        }
+    }
+
+    private func deferToExistingInstanceIfNeeded(isTestRun: Bool) -> Bool {
+        guard !isTestRun,
+              let bundleIdentifier = Bundle.main.bundleIdentifier
+        else {
+            return false
+        }
+
+        let runningInstances = NSRunningApplication.runningApplications(
+            withBundleIdentifier: bundleIdentifier
+        ).filter { !$0.isTerminated }
+        let currentProcessIdentifier = ProcessInfo.processInfo.processIdentifier
+        guard let keeper = runningInstances.min(by: { lhs, rhs in
+            let lhsDate = lhs.launchDate ?? .distantFuture
+            let rhsDate = rhs.launchDate ?? .distantFuture
+            if lhsDate != rhsDate {
+                return lhsDate < rhsDate
+            }
+            return lhs.processIdentifier < rhs.processIdentifier
+        }),
+            keeper.processIdentifier != currentProcessIdentifier
+        else {
+            return false
+        }
+
+        keeper.activate(options: [.activateAllWindows])
+        NSApp.terminate(nil)
+        return true
+    }
+
+    func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
+        guard let controller, controller.meetingCaptureNeedsFinalization else {
+            return .terminateNow
+        }
+        guard terminationTask == nil else { return .terminateLater }
+
+        terminationTask = Task { @MainActor [weak self] in
+            let canTerminate = await controller.prepareMeetingCaptureForTermination()
+            self?.terminationTask = nil
+            NSApp.reply(toApplicationShouldTerminate: canTerminate)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_: Notification) {
-        controller.stopThreadUpdates()
+        terminationTask?.cancel()
+        terminationTask = nil
+        controller?.stopThreadUpdates()
         panelHotKey?.unregister()
         panelHotKey = nil
         dictationHotKey?.unregister()
@@ -5080,6 +7174,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let keyboardMonitor {
             NSEvent.removeMonitor(keyboardMonitor)
         }
+
+        panelWindow?.orderOut(nil)
+        panelWindow = nil
+        if automaticTerminationDisabled {
+            ProcessInfo.processInfo.enableAutomaticTermination(Self.automaticTerminationReason)
+            automaticTerminationDisabled = false
+        }
     }
 }
 
@@ -5089,6 +7190,8 @@ struct IAgentPanelApp {
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
-        app.run()
+        withExtendedLifetime(delegate) {
+            app.run()
+        }
     }
 }

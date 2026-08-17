@@ -28,9 +28,19 @@ struct MeetingRecorderView: View {
       }
     }
     .preferredColorScheme(.dark)
-    .interactiveDismissDisabled(recorder.isRecording)
+    .interactiveDismissDisabled(
+      recorder.isRecording
+        || recorder.isStarting
+        || recorder.isStopping
+        || recorder.hasRecoverableRecording
+        || model.isFinalizingRecording
+    )
     .task {
-      guard model.lastRecordedNote == nil, !recorder.isRecording else { return }
+      guard model.shouldAutoStartRecorder,
+            !recorder.isRecording,
+            !recorder.hasRecoverableRecording,
+            !model.isFinalizingRecording
+      else { return }
       await model.startRecording()
     }
   }
@@ -46,13 +56,24 @@ struct MeetingRecorderView: View {
             .background(PanelTheme.surface, in: Circle())
         }
         .buttonStyle(.plain)
+        .disabled(
+          recorder.isRecording
+            || recorder.isStarting
+            || recorder.isStopping
+            || recorder.hasRecoverableRecording
+            || model.isFinalizingRecording
+        )
         .accessibilityLabel("Close")
 
         Spacer()
 
-        Text(recorder.isRecording ? "LISTENING" : model.lastRecordedNote == nil ? "READY" : "SAVED")
+        Text(recorderStatus)
           .font(.system(size: 10, weight: .bold))
-          .foregroundStyle(recorder.isRecording ? PanelTheme.coral : PanelTheme.secondary)
+          .foregroundStyle(
+            recorder.isRecording || recorder.errorMessage != nil
+              ? PanelTheme.coral
+              : PanelTheme.secondary
+          )
       }
 
       Spacer(minLength: 24)
@@ -84,15 +105,10 @@ struct MeetingRecorderView: View {
 
   private var transcriptHeader: some View {
     HStack {
-      Text(model.lastRecordedNote == nil ? "LIVE TRANSCRIPT" : "MEETING NOTE")
+      Text("LIVE TRANSCRIPT")
         .font(.system(size: 10, weight: .bold))
         .foregroundStyle(PanelTheme.tertiary)
       Spacer()
-      if model.lastRecordedNote != nil {
-        Label("Saved", systemImage: "checkmark")
-          .font(.system(size: 10, weight: .bold))
-          .foregroundStyle(PanelTheme.green)
-      }
     }
     .padding(.horizontal, 24)
     .frame(height: 48)
@@ -107,23 +123,19 @@ struct MeetingRecorderView: View {
               .font(.system(size: 18, weight: .semibold))
               .foregroundStyle(PanelTheme.coral)
               .lineSpacing(5)
-          } else if let note = model.lastRecordedNote {
-            Text(note.body)
-              .font(.system(size: 17, weight: .medium))
-              .foregroundStyle(PanelTheme.primary)
-              .lineSpacing(6)
-              .textSelection(.enabled)
-          } else if recorder.transcript.isEmpty {
-            Text("Words from the room will appear here as the conversation unfolds.")
-              .font(.system(size: 18, weight: .semibold))
-              .foregroundStyle(PanelTheme.secondary)
-              .lineSpacing(6)
-          } else {
+          }
+
+          if !recorder.transcript.isEmpty {
             Text(recorder.transcript)
               .font(.system(size: 19, weight: .semibold))
               .foregroundStyle(PanelTheme.primary)
               .lineSpacing(7)
               .textSelection(.enabled)
+          } else if recorder.errorMessage == nil {
+            Text("Words from the room will appear here as the conversation unfolds.")
+              .font(.system(size: 18, weight: .semibold))
+              .foregroundStyle(PanelTheme.secondary)
+              .lineSpacing(6)
           }
 
           Color.clear.frame(height: 1).id("latest")
@@ -140,33 +152,28 @@ struct MeetingRecorderView: View {
 
   private var controls: some View {
     VStack(spacing: 14) {
-      JoiRecorderWaveform(levels: recorder.levels, isActive: recorder.isRecording)
+      JoiAudioWaveform(
+        levels: recorder.levels,
+        color: PanelTheme.coral,
+        isActive: recorder.isRecording
+      )
         .frame(height: 36)
 
-      if model.lastRecordedNote != nil {
-        Button {
-          model.dismissRecorder()
-          model.selectedTab = .notes
-        } label: {
-          Text("Open note")
-            .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(.black)
-            .frame(maxWidth: .infinity)
-            .frame(height: 48)
-            .background(PanelTheme.primary, in: Capsule())
-        }
-        .buttonStyle(.plain)
-      } else {
-        Button {
-          Task {
-            if recorder.isRecording {
-              await model.finishRecording()
-            } else {
-              await model.startRecording()
-            }
+      Button {
+        Task {
+          if recorder.isRecording || recorder.hasRecoverableRecording {
+            await model.finishRecording()
+          } else {
+            await model.startRecording()
           }
-        } label: {
-          HStack(spacing: 10) {
+        }
+      } label: {
+        HStack(spacing: 10) {
+          if recorder.isStarting || recorder.isStopping || model.isFinalizingRecording {
+            ProgressView()
+              .tint(PanelTheme.primary)
+              .frame(width: 32, height: 32)
+          } else {
             ZStack {
               Circle()
                 .fill(PanelTheme.coral)
@@ -179,49 +186,51 @@ struct MeetingRecorderView: View {
                 Circle().fill(.white).frame(width: 11, height: 11)
               }
             }
-
-            Text(recorder.isRecording ? "Stop and save" : "Start listening")
-              .font(.system(size: 15, weight: .bold))
-              .foregroundStyle(PanelTheme.primary)
           }
-          .frame(maxWidth: .infinity)
-          .frame(height: 48)
-          .background(PanelTheme.sheetRaised, in: Capsule())
-          .overlay { Capsule().stroke(PanelTheme.strongBorder, lineWidth: 0.5) }
+
+          Text(
+            model.isFinalizingRecording
+              ? "Saving meeting note"
+              : recorder.isStarting
+                ? "Preparing recorder"
+                : recorder.isStopping
+                  ? "Finishing transcript"
+                  : recorder.isRecording
+                    ? "Stop and save"
+                    : recorder.hasRecoverableRecording
+                      ? "Save partial meeting"
+                      : "Start listening"
+          )
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(PanelTheme.primary)
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .frame(height: 48)
+        .background(PanelTheme.sheetRaised, in: Capsule())
+        .overlay { Capsule().stroke(PanelTheme.strongBorder, lineWidth: 0.5) }
       }
+      .buttonStyle(.plain)
+      .disabled(recorder.isStarting || recorder.isStopping || model.isFinalizingRecording)
+      .accessibilityIdentifier("meeting-recorder-primary-action")
+      .accessibilityLabel(
+        model.isFinalizingRecording
+          ? "Saving meeting note"
+          : recorder.isRecording || recorder.hasRecoverableRecording
+            ? "Save meeting"
+            : "Start meeting recording"
+      )
     }
     .padding(.horizontal, 24)
     .padding(.top, 14)
     .padding(.bottom, 22)
   }
-}
 
-private struct JoiRecorderWaveform: View {
-  let levels: [CGFloat]
-  let isActive: Bool
-
-  var body: some View {
-    Canvas { context, size in
-      let count = max(1, levels.count)
-      let stride = size.width / CGFloat(count)
-      let width = max(1.2, min(2.2, stride * 0.42))
-      for (index, level) in levels.enumerated() {
-        let normalized = isActive ? max(0.05, min(1, level)) : 0.05
-        let height = max(2, normalized * size.height)
-        let rect = CGRect(
-          x: CGFloat(index) * stride + (stride - width) / 2,
-          y: (size.height - height) / 2,
-          width: width,
-          height: height
-        )
-        context.fill(
-          Path(roundedRect: rect, cornerRadius: width / 2),
-          with: .color(isActive ? PanelTheme.coral.opacity(0.86) : PanelTheme.tertiary)
-        )
-      }
-    }
-    .accessibilityLabel(isActive ? "Live microphone level" : "Recorder idle")
+  private var recorderStatus: String {
+    if model.isFinalizingRecording { return "SAVING" }
+    if recorder.isStarting { return "PREPARING" }
+    if recorder.isStopping { return "FINISHING" }
+    if recorder.isRecording { return "LISTENING" }
+    if recorder.errorMessage != nil { return "UNAVAILABLE" }
+    return "READY"
   }
 }

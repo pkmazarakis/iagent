@@ -42,6 +42,8 @@ enum CodexThreadLoader {
   private struct RolloutSnapshot: Sendable {
     var activity: String?
     var activityDate: Date?
+    var activityHistory: [AgentThreadActivity] = []
+    var visibleOutputs: [AgentThreadVisibleOutput] = []
     var state: AgentState = .completed
     var activeStart: Date?
     var lastDuration: TimeInterval?
@@ -132,6 +134,8 @@ enum CodexThreadLoader {
         workspacePath: stored.cwd.isEmpty ? nil : stored.cwd,
         title: title,
         activity: activity,
+        activityHistory: snapshot.activityHistory,
+        visibleOutputs: snapshot.visibleOutputs,
         state: snapshot.state,
         modes: modes,
         elapsed: elapsed,
@@ -542,15 +546,14 @@ enum CodexThreadLoader {
           parserState.completedCallIDs.removeAll(keepingCapacity: true)
 
         case "agent_reasoning":
-          if let value = payload["text"] as? String, let activity = cleanActivity(value) {
-            parserState.snapshot.activity = activity
-            parserState.snapshot.activityDate = timestamp
+          if let value = payload["text"] as? String {
+            appendActivity(value, timestamp: timestamp, to: &parserState.snapshot)
           }
 
         case "agent_message":
-          if let value = payload["message"] as? String, let activity = cleanActivity(value) {
-            parserState.snapshot.activity = activity
-            parserState.snapshot.activityDate = timestamp
+          if let value = payload["message"] as? String {
+            appendActivity(value, timestamp: timestamp, to: &parserState.snapshot)
+            appendVisibleOutput(value, timestamp: timestamp, to: &parserState.snapshot)
           }
 
         default:
@@ -714,6 +717,69 @@ enum CodexThreadLoader {
 
     guard !collapsed.isEmpty else { return nil }
     return concise(collapsed, limit: 150)
+  }
+
+  private static func appendActivity(
+    _ value: String,
+    timestamp: Date?,
+    to snapshot: inout RolloutSnapshot
+  ) {
+    guard let activity = cleanActivity(value) else { return }
+    snapshot.activity = activity
+    snapshot.activityDate = timestamp ?? snapshot.activityDate
+    guard let occurredAt = timestamp ?? snapshot.activityDate else { return }
+
+    if let last = snapshot.activityHistory.last,
+       last.text == activity,
+       abs(last.occurredAt.timeIntervalSince(occurredAt)) < 0.5 {
+      return
+    }
+
+    let milliseconds = Int64((occurredAt.timeIntervalSince1970 * 1_000).rounded())
+    snapshot.activityHistory.append(
+      AgentThreadActivity(
+        id: "\(milliseconds):\(activity)",
+        text: activity,
+        occurredAt: occurredAt
+      )
+    )
+    if snapshot.activityHistory.count > 12 {
+      snapshot.activityHistory.removeFirst(snapshot.activityHistory.count - 12)
+    }
+  }
+
+  private static func appendVisibleOutput(
+    _ value: String,
+    timestamp: Date?,
+    to snapshot: inout RolloutSnapshot
+  ) {
+    guard let occurredAt = timestamp,
+          let text = cleanVisibleOutput(value)
+    else { return }
+    if let last = snapshot.visibleOutputs.last,
+       last.text == text,
+       abs(last.occurredAt.timeIntervalSince(occurredAt)) < 0.5 {
+      return
+    }
+    let milliseconds = Int64((occurredAt.timeIntervalSince1970 * 1_000).rounded())
+    snapshot.visibleOutputs.append(
+      AgentThreadVisibleOutput(
+        id: "visible:\(milliseconds):\(snapshot.visibleOutputs.count)",
+        text: text,
+        occurredAt: occurredAt
+      )
+    )
+    if snapshot.visibleOutputs.count > 6 {
+      snapshot.visibleOutputs.removeFirst(snapshot.visibleOutputs.count - 6)
+    }
+  }
+
+  private static func cleanVisibleOutput(_ value: String) -> String? {
+    let collapsed = value
+      .replacingOccurrences(of: "\u{0000}", with: "")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !collapsed.isEmpty else { return nil }
+    return concise(collapsed, limit: 1_200)
   }
 
   private static func concise(_ value: String, limit: Int) -> String {

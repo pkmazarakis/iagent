@@ -1,0 +1,77 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "iagent-ask-iagent-relay",
+  "main": "src/worker.mjs",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
+  "workers_dev": true,
+  "vars": {
+    "SERVICE_ENABLED": "true",
+    "ATTESTATION_EXCHANGE_ENABLED": "true",
+    "PRICING_CONFIGURED": "true",
+    "ENABLED_TIERS": "fast,pro",
+    "TOKEN_ISSUER": "iagent-anonymous-attestation",
+    "TOKEN_AUDIENCE": "ask-iagent-relay",
+    "TOKEN_MAX_TTL_SECONDS": "180",
+    "CHALLENGE_TTL_SECONDS": "120",
+    "CHALLENGE_REQUESTS_PER_MINUTE": "12",
+    "ATTESTATION_GLOBAL_REQUESTS_PER_MINUTE": "600",
+    "ATTESTATION_NETWORK_REQUESTS_PER_MINUTE": "60",
+    "APP_ATTEST_TEAM_IDENTIFIER": "625CGY297X",
+    "APP_ATTEST_BUNDLE_IDENTIFIER": "com.platon.iagent.mobile",
+    "APP_ATTEST_ALLOWED_ENVIRONMENTS": "production",
+    "APP_ATTEST_ALLOWED_VALIDATION_CATEGORIES": "2,4",
+    "APP_ATTEST_ALLOWED_BUNDLE_VERSIONS": "18,24,25,26,27,28,29,30",
+    "APP_ATTEST_REQUIRE_IOS27_SIGNALS": "false",
+    "DEVICECHECK_FALLBACK_ENABLED": "false",
+    "DEVICECHECK_ENVIRONMENT": "production",
+    "DEVICECHECK_REPLAY_TTL_SECONDS": "86400",
+    "REQUESTS_PER_MINUTE": "12",
+    "MAX_CONCURRENT_REQUESTS": "1",
+    "DAILY_SPEND_LIMIT_MICRODOLLARS": "1000000",
+    "DEVICECHECK_ENABLED_TIERS": "fast",
+    "DEVICECHECK_REQUESTS_PER_MINUTE": "2",
+    "DEVICECHECK_MAX_CONCURRENT_REQUESTS": "1",
+    "DEVICECHECK_DAILY_SPEND_LIMIT_MICRODOLLARS": "150000",
+    "RESERVATION_LEASE_MILLISECONDS": "300000",
+    "FAST_INPUT_MICRODOLLARS_PER_MILLION": "1000000",
+    "FAST_CACHED_INPUT_MICRODOLLARS_PER_MILLION": "100000",
+    "FAST_CACHE_WRITE_MICRODOLLARS_PER_MILLION": "1250000",
+    "FAST_OUTPUT_MICRODOLLARS_PER_MILLION": "6000000",
+    "PRO_INPUT_MICRODOLLARS_PER_MILLION": "5000000",
+    "PRO_CACHED_INPUT_MICRODOLLARS_PER_MILLION": "500000",
+    "PRO_CACHE_WRITE_MICRODOLLARS_PER_MILLION": "6250000",
+    "PRO_OUTPUT_MICRODOLLARS_PER_MILLION": "30000000"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "INSTALLATION_LIMITER",
+        "class_name": "InstallationLimiter"
+      },
+      {
+        "name": "ATTESTATION_STATE",
+        "class_name": "AttestationState"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["InstallationLimiter"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["AttestationState"]
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    }
+  }
+}

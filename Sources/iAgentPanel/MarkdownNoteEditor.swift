@@ -541,7 +541,7 @@ struct MarkdownNoteFindBar: View {
                 isPresented = false
             }
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, PanelPageLayout.contentInset)
         .frame(height: 34)
         .background(.white.opacity(0.025))
         .overlay(alignment: .bottom) {
