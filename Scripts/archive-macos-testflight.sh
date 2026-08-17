@@ -12,6 +12,8 @@ STAGING_APP="$DESTINATION/staging/iAgentPanel.app"
 ARCHIVE="$DESTINATION/iAgentPanel.xcarchive"
 ARCHIVED_APP="$ARCHIVE/Products/Applications/iAgentPanel.app"
 PKG="$DESTINATION/iAgentPanel.pkg"
+SWIFTPM_SCRATCH="$(mktemp -d /private/tmp/iagent-testflight-swiftpm.XXXXXX)"
+EMBEDDED_INFO_PLIST="$(mktemp /private/tmp/iagent-embedded-info.XXXXXX)"
 
 fail() { print -u2 -- "macOS TestFlight archive failed: $1"; exit 1 }
 
@@ -28,7 +30,9 @@ PACKAGE_CHECK_ROOT="$(mktemp -d /private/tmp/iagent-package-quarantine.XXXXXX)"
 
 cleanup() {
   rm -f "$PROFILE_PLIST"
+  rm -f "$EMBEDDED_INFO_PLIST"
   /bin/rm -rf -- "$PACKAGE_CHECK_ROOT"
+  /bin/rm -rf -- "$SWIFTPM_SCRATCH"
 }
 trap cleanup EXIT
 
@@ -58,10 +62,39 @@ IAGENT_PROVISIONING_PROFILE="$PROFILE" \
 IAGENT_CODESIGN_ENTITLEMENTS="$ENTITLEMENTS" \
 IAGENT_BUILD_CONFIGURATION=release \
 IAGENT_APP_OUTPUT_PATH="$STAGING_APP" \
+IAGENT_SWIFTPM_SCRATCH_PATH="$SWIFTPM_SCRATCH" \
 IAGENT_REQUIRE_FRESH_APP=1 \
   "$ROOT/Scripts/build-app.sh"
 /usr/bin/ditto --noqtn "$STAGING_APP" "$ARCHIVED_APP"
 assert_no_quarantine "$ARCHIVED_APP" "archived app"
+
+ARCHIVED_EXECUTABLE="$ARCHIVED_APP/Contents/MacOS/iAgentPanel"
+ARCHIVED_INFO_PLIST="$ARCHIVED_APP/Contents/Info.plist"
+/usr/bin/xcrun llvm-objdump \
+  --macho \
+  --section='__TEXT,__info_plist' \
+  --full-contents \
+  "$ARCHIVED_EXECUTABLE" \
+  | /usr/bin/sed -n '/^<?xml/,$p' > "$EMBEDDED_INFO_PLIST"
+[[ -s "$EMBEDDED_INFO_PLIST" ]] || fail "could not extract the executable's embedded Info.plist"
+/usr/bin/plutil -lint "$EMBEDDED_INFO_PLIST" >/dev/null \
+  || fail "the executable's embedded Info.plist is invalid"
+for metadata_key in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion; do
+  expected_value="$(/usr/libexec/PlistBuddy -c "Print :$metadata_key" "$ROOT/Sources/iAgentPanel/Info.plist")"
+  external_value="$(/usr/libexec/PlistBuddy -c "Print :$metadata_key" "$ARCHIVED_INFO_PLIST")"
+  embedded_value="$(/usr/libexec/PlistBuddy -c "Print :$metadata_key" "$EMBEDDED_INFO_PLIST")"
+  [[ "$external_value" == "$expected_value" ]] \
+    || fail "$metadata_key in the archived app does not match the release source"
+  [[ "$embedded_value" == "$expected_value" ]] \
+    || fail "$metadata_key in the executable does not match the release source"
+done
+for compiled_marker in HomeMessageMoreIcon NotesListView MessageInboxView PanelPageHeader PanelTooltipPresenter; do
+  /usr/bin/strings "$ARCHIVED_EXECUTABLE" | /usr/bin/grep -Fx "$compiled_marker" >/dev/null \
+    || fail "compiled desktop marker is missing: $compiled_marker"
+done
+/usr/bin/strings "$ARCHIVED_EXECUTABLE" \
+  | /usr/bin/grep -F 'Expected the collapsed panel to match the menu bar height.' >/dev/null \
+  || fail "compiled physical-top compact-panel assertion is missing"
 
 /usr/libexec/PlistBuddy -c 'Clear dict' "$ARCHIVE/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add :ArchiveVersion integer 2' "$ARCHIVE/Info.plist"

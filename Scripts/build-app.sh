@@ -12,6 +12,8 @@ else
 fi
 APP="${IAGENT_APP_OUTPUT_PATH:-$DEFAULT_APP}"
 CONTENTS="$APP/Contents"
+SWIFTPM_SCRATCH_PATH="${IAGENT_SWIFTPM_SCRATCH_PATH:-$ROOT/.build}"
+SWIFTPM_SCRATCH_PATH="${SWIFTPM_SCRATCH_PATH:A}"
 if [[ -n "${IAGENT_BUILD_CONFIGURATION:-}" ]]; then
   BUILD_CONFIGURATION="$IAGENT_BUILD_CONFIGURATION"
 elif [[ "$SIGNING_IDENTITY" == "-" ]]; then
@@ -40,18 +42,30 @@ if [[ "${IAGENT_REQUIRE_FRESH_APP:-0}" == "1" && -e "$APP" ]]; then
 fi
 
 cd "$ROOT"
-export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/iagent-clang-cache}"
-export SWIFTPM_MODULECACHE_OVERRIDE="${SWIFTPM_MODULECACHE_OVERRIDE:-/private/tmp/iagent-swift-cache}"
-export SWIFT_MODULECACHE_PATH="${SWIFT_MODULECACHE_PATH:-/private/tmp/iagent-swift-cache}"
+mkdir -p "$SWIFTPM_SCRATCH_PATH/module-cache/clang" "$SWIFTPM_SCRATCH_PATH/module-cache/swift"
+export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$SWIFTPM_SCRATCH_PATH/module-cache/clang}"
+export SWIFTPM_MODULECACHE_OVERRIDE="${SWIFTPM_MODULECACHE_OVERRIDE:-$SWIFTPM_SCRATCH_PATH/module-cache/swift}"
+export SWIFT_MODULECACHE_PATH="${SWIFT_MODULECACHE_PATH:-$SWIFTPM_SCRATCH_PATH/module-cache/swift}"
 swift "$ROOT/Scripts/generate-calendar-day-assets.swift"
-swift build --configuration "$BUILD_CONFIGURATION" --disable-sandbox
+SWIFT_BUILD_ARGS=(
+  --configuration "$BUILD_CONFIGURATION"
+  --disable-sandbox
+  --disable-build-manifest-caching
+  --scratch-path "$SWIFTPM_SCRATCH_PATH"
+)
+swift build "${SWIFT_BUILD_ARGS[@]}"
+BIN_PATH="$(swift build "${SWIFT_BUILD_ARGS[@]}" --show-bin-path)"
+if [[ ! -x "$BIN_PATH/iAgentPanel" ]]; then
+  print -u2 -- "Built iAgentPanel executable is missing at $BIN_PATH/iAgentPanel."
+  exit 2
+fi
 
 mkdir -p "$CONTENTS/MacOS"
 mkdir -p "$CONTENTS/Resources"
-cp "$ROOT/.build/$BUILD_CONFIGURATION/iAgentPanel" "$CONTENTS/MacOS/iAgentPanel"
+cp "$BIN_PATH/iAgentPanel" "$CONTENTS/MacOS/iAgentPanel"
 cp "$ROOT/Sources/iAgentPanel/Info.plist" "$CONTENTS/Info.plist"
 cp "$ROOT/Sources/iAgentPanel/Resources/iAgentPanel.icns" "$CONTENTS/Resources/iAgentPanel.icns"
-for bundle in "$ROOT"/.build/$BUILD_CONFIGURATION/*.bundle; do
+for bundle in "$BIN_PATH"/*.bundle; do
   ditto "$bundle" "$CONTENTS/Resources/${bundle:t}"
 done
 
