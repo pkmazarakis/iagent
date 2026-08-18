@@ -622,7 +622,7 @@ private struct MessageConversationPage: View {
 
     private var eligibleRecipients: [MessageReplyRecipient] {
         guard !conversation.isGroup else { return [] }
-        conversation.participants.compactMap(MessageReplyRecipient.init(participant:))
+        return conversation.participants.compactMap(MessageReplyRecipient.init(participant:))
     }
 
     private var selectedRecipients: [MessageReplyRecipient] {
