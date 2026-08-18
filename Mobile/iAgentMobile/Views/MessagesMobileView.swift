@@ -888,7 +888,7 @@ private struct MessagesHistorySheet: View {
     for conversation: SyncedMessageConversation
   ) -> [MessageReplyRecipient] {
     guard !conversation.isGroup else { return [] }
-    conversation.participants
+    return conversation.participants
       .compactMap(MessageReplyRecipient.init(participant:))
       .filter { $0.address.kind == .phone }
   }
