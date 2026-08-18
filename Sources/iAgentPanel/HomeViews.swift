@@ -715,22 +715,39 @@ struct CalendarDayView: View {
                     detail: "Your calendar is clear."
                 )
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(calendarService.events) { event in
-                            CalendarEventRow(
-                                event: event,
-                                referenceNow: calendarService.referenceNow,
-                                action: calendarService.openCalendar,
-                                openLink: calendarService.openEventLink,
-                                startRecording: {
-                                    controller.startMeetingCaptureFromCalendar(event)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(calendarService.events) { event in
+                                CalendarEventRow(
+                                    event: event,
+                                    referenceNow: calendarService.referenceNow,
+                                    action: calendarService.openCalendar,
+                                    openLink: calendarService.openEventLink,
+                                    startRecording: {
+                                        controller.startMeetingCaptureFromCalendar(event)
+                                    }
+                                )
+                                .id(event.id)
+                                .background {
+                                    if controller.routedCalendarEventID == event.id {
+                                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                            .fill(Color.agentBlue.opacity(0.13))
+                                            .padding(.horizontal, 6)
+                                    }
                                 }
-                            )
+                            }
                         }
                     }
+                    .scrollIndicators(.hidden)
+                    .task(id: controller.routedCalendarEventID) {
+                        guard let id = controller.routedCalendarEventID,
+                              calendarService.events.contains(where: { $0.id == id })
+                        else { return }
+                        await Task.yield()
+                        proxy.scrollTo(id, anchor: .center)
+                    }
                 }
-                .scrollIndicators(.hidden)
             }
         case .idle, .requesting:
             CalendarAccessStateView(

@@ -53,7 +53,7 @@ struct LocalDocumentStore: Sendable {
     body suppliedBody: String
   ) throws -> LocalDocument {
     let body = suppliedBody
-    let title = normalizedTitle(suppliedTitle, body: body, kind: kind)
+    let title = normalizedTitle(suppliedTitle, kind: kind)
     let now = Date()
     let directory = rootURL.appendingPathComponent(kind.rawValue, isDirectory: true)
     try FileManager.default.createDirectory(
@@ -83,7 +83,7 @@ struct LocalDocumentStore: Sendable {
     body suppliedBody: String
   ) throws -> LocalDocument {
     let body = suppliedBody
-    let title = normalizedTitle(suppliedTitle, body: body, kind: document.kind)
+    let title = normalizedTitle(suppliedTitle, kind: document.kind)
     let directory = document.fileURL.deletingLastPathComponent()
     try FileManager.default.createDirectory(
       at: directory,
@@ -172,40 +172,74 @@ struct LocalDocumentStore: Sendable {
     return Self.isMaterialized(fileSystemFlags: metadata.st_flags)
   }
 
+  /// Returns a portable library-relative path suitable for an iAgent deep
+  /// link. Absolute paths never leave the local process.
+  func relativePath(for fileURL: URL) -> String? {
+    let rootPath = rootURL.standardizedFileURL.path + "/"
+    let path = fileURL.standardizedFileURL.path
+    guard path.hasPrefix(rootPath) else { return nil }
+    let relativePath = String(path.dropFirst(rootPath.count))
+    return isSafeDocumentPath(relativePath) ? relativePath : nil
+  }
+
+  /// Loads exactly one document addressed by its portable library-relative
+  /// path. Standardizing and re-checking containment prevents a crafted link
+  /// from escaping the iAgent Library root.
+  func load(relativePath: String) -> LocalDocument? {
+    guard isSafeDocumentPath(relativePath) else { return nil }
+    let fileURL = rootURL.appendingPathComponent(relativePath).standardizedFileURL
+    guard self.relativePath(for: fileURL) == relativePath,
+          FileManager.default.fileExists(atPath: fileURL.path),
+          isMaterializedFile(at: fileURL),
+          let source = try? String(contentsOf: fileURL, encoding: .utf8)
+    else { return nil }
+
+    let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+    guard let folder = components.first,
+          let kind = LocalDocumentKind(rawValue: String(folder))
+    else { return nil }
+
+    let fallbackTitle = fileURL.deletingPathExtension().lastPathComponent
+    let parsed = parseMarkdown(source, fallbackTitle: fallbackTitle)
+
+    let values = try? fileURL.resourceValues(
+      forKeys: [.creationDateKey, .contentModificationDateKey]
+    )
+    let createdAt = values?.creationDate ?? values?.contentModificationDate ?? Date()
+    return LocalDocument(
+      id: documentID(for: fileURL),
+      kind: kind,
+      title: parsed.title,
+      body: parsed.body,
+      createdAt: createdAt,
+      updatedAt: values?.contentModificationDate ?? createdAt,
+      fileURL: fileURL
+    )
+  }
+
   private func normalizedTitle(
     _ suppliedTitle: String,
-    body: String,
     kind: LocalDocumentKind
   ) -> String {
     let supplied = suppliedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
     if !supplied.isEmpty {
       return concise(supplied, limit: 80)
     }
-
-    let firstLine = body
-      .components(separatedBy: .newlines)
-      .lazy
-      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-      .first(where: { !$0.isEmpty }) ?? ""
-    if !firstLine.isEmpty {
-      return concise(plainTextTitle(firstLine), limit: 56)
-    }
     return "Untitled \(kind.singularLabel)"
   }
 
-  private func plainTextTitle(_ markdownLine: String) -> String {
-    let withoutBlockMarker = markdownLine.replacingOccurrences(
-      of: #"^\s{0,3}(?:#{1,6}\s+|>\s+|(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s*)?)"#,
-      with: "",
-      options: .regularExpression
-    )
-    let withoutInlineMarkers = withoutBlockMarker.replacingOccurrences(
-      of: #"[`*_~]+"#,
-      with: "",
-      options: .regularExpression
-    )
-    let title = withoutInlineMarkers.trimmingCharacters(in: .whitespacesAndNewlines)
-    return title.isEmpty ? markdownLine : title
+  private func isSafeDocumentPath(_ value: String) -> Bool {
+    guard !value.isEmpty,
+          !value.hasPrefix("/"),
+          !value.hasPrefix("~"),
+          value.utf8.count <= 512,
+          (value as NSString).pathExtension.lowercased() == "md"
+    else { return false }
+    let components = value.split(separator: "/", omittingEmptySubsequences: false)
+    guard let folder = components.first,
+          LocalDocumentKind(rawValue: String(folder)) != nil
+    else { return false }
+    return !components.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
   }
 
   private func markdown(title: String, body: String) -> String {

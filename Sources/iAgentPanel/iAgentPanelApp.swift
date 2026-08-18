@@ -134,6 +134,7 @@ enum PanelContentMode: Hashable, Sendable {
     case newThread
     case focus
     case todo
+    case todoDetail(UUID)
 }
 
 enum NoteSaveState: Equatable, Sendable {
@@ -506,6 +507,16 @@ final class PanelController: ObservableObject {
     @Published private(set) var notes: [LocalDocument] = []
     @Published private(set) var noteCount = 0
     @Published private(set) var noteListIssue: String?
+    @Published var todoEditorTitle = ""
+    @Published var todoEditorNotes = ""
+    @Published private(set) var todoEditorFocusRequest = 0
+    @Published var todoShowsRawMarkdown = false
+    @Published var todoFindVisible = false
+    @Published private(set) var todoSaveState: NoteSaveState = .idle
+    @Published private(set) var syncedArtifactMentions: [ArtifactMention] = []
+    @Published private(set) var syncedCalendarEvents: [SyncedCalendarEvent] = []
+    @Published private(set) var routedTodoID: UUID?
+    @Published private(set) var routedCalendarEventID: String?
     @Published private(set) var savedTodoListNames: [String] = []
     @Published private(set) var completingTodoIDs: Set<UUID> = []
     @Published private(set) var fadingTodoIDs: Set<UUID> = []
@@ -561,6 +572,11 @@ final class PanelController: ObservableObject {
     private var meetingCaptureStopTask: Task<Bool, Never>?
     private var meetingCaptureStopID: UUID?
     private var todoCompletionTasks: [UUID: Task<Void, Never>] = [:]
+    private var todoAutosaveTask: Task<Void, Never>?
+    private var todoEditorBaseTitle = ""
+    private var todoEditorBaseNotes: String?
+    private var todoEditorHasUnsavedChanges = false
+    private var todoEditorHasRemoteConflict = false
     private var desktopSyncTimer: Timer?
     private var desktopSyncDebounceTask: Task<Void, Never>?
     @Published private var desktopSyncInFlight = false
@@ -698,6 +714,113 @@ final class PanelController: ObservableObject {
         messageInboxFilter = messageInboxFilter == filter ? .all : filter
     }
 
+    /// Live desktop sources override the last synchronized projection so the
+    /// picker updates immediately after a local edit while still including all
+    /// portable note paths materialized by the sync store.
+    var artifactMentions: [ArtifactMention] {
+        // The desktop calendar page renders today's live EventKit rows. Rebuild
+        // this one section from those rows while preserving the synced
+        // occurrence's portable route ID for links shared between devices.
+        var byID = Dictionary(
+            uniqueKeysWithValues: syncedArtifactMentions
+                .filter { $0.kind != .calendarEvent }
+                .map { ($0.id, $0) }
+        )
+
+        for todo in todos {
+            let title = todo.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { continue }
+            let mention = ArtifactMention(
+                kind: .todo,
+                artifactID: todo.id.uuidString,
+                title: title,
+                subtitle: todo.isCompleted ? "Completed" : todo.listName,
+                updatedAt: todo.updatedAt
+            )
+            byID[mention.id] = mention
+        }
+
+        for event in calendarService.events {
+            let title = event.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { continue }
+            let mention = ArtifactMention(
+                kind: .calendarEvent,
+                artifactID: calendarArtifactID(for: event),
+                title: title,
+                subtitle: event.startDate.formatted(date: .abbreviated, time: .shortened),
+                updatedAt: event.updatedAt
+            )
+            byID[mention.id] = mention
+        }
+
+        for thread in threads {
+            let title = thread.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { continue }
+            let mention = ArtifactMention(
+                kind: .codexThread,
+                artifactID: thread.id,
+                title: title,
+                subtitle: thread.projectName ?? "Codex",
+                updatedAt: thread.updatedAt
+            )
+            byID[mention.id] = mention
+        }
+
+        if let document = lastSavedDocument,
+           document.kind == .note,
+           let relativePath = documentStore.relativePath(for: document.fileURL)
+        {
+            let title = document.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !title.isEmpty {
+                let mention = ArtifactMention(
+                    kind: .note,
+                    artifactID: relativePath,
+                    title: title,
+                    subtitle: document.kind.singularLabel.capitalized,
+                    updatedAt: document.createdAt
+                )
+                byID[mention.id] = mention
+            }
+        }
+
+        return byID.values.filter { $0.url != nil }.sorted { lhs, rhs in
+            let leftKind = ArtifactMentionKind.allCases.firstIndex(of: lhs.kind) ?? .max
+            let rightKind = ArtifactMentionKind.allCases.firstIndex(of: rhs.kind) ?? .max
+            if leftKind != rightKind { return leftKind < rightKind }
+            if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
+            let titleOrder = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+            if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
+            return lhs.id < rhs.id
+        }
+    }
+
+    private func calendarArtifactID(for event: CalendarEventItem) -> String {
+        let occurrence = syncedCalendarEvent(from: event)
+        let matchingIDs = Set(syncedCalendarEvents.lazy.filter {
+            $0.deletedAt == nil && $0.isSameOccurrence(as: occurrence)
+        }.map(\.id))
+        return syncedArtifactMentions.first {
+            $0.kind == .calendarEvent && matchingIDs.contains($0.artifactID)
+        }?.artifactID ?? event.id
+    }
+
+    private func syncedCalendarEvent(from event: CalendarEventItem) -> SyncedCalendarEvent {
+        SyncedCalendarEvent(
+            id: event.id,
+            sourceIdentifier: event.sourceIdentifier,
+            title: event.title,
+            startDate: event.startDate,
+            endDate: event.endDate,
+            isAllDay: event.isAllDay,
+            calendarTitle: event.calendarTitle,
+            location: event.location,
+            notes: event.notes,
+            calendarColorHex: event.tint.hexString,
+            linkURLs: event.linkURLs,
+            updatedAt: event.updatedAt
+        )
+    }
+
     var editorWordCount: Int {
         editorBody.split(whereSeparator: { $0.isWhitespace }).count
     }
@@ -712,6 +835,20 @@ final class PanelController: ObservableObject {
             .sorted {
                 ($0.completedAt ?? $0.createdAt) > ($1.completedAt ?? $1.createdAt)
             }
+    }
+
+    var selectedTodoID: UUID? {
+        guard case let .todoDetail(id) = contentMode else { return nil }
+        return id
+    }
+
+    var selectedTodo: LocalTodo? {
+        guard let selectedTodoID else { return nil }
+        return todos.first { $0.id == selectedTodoID }
+    }
+
+    var todoEditorDocumentID: String {
+        selectedTodoID.map { "todo-\($0.uuidString)" } ?? "todo-none"
     }
 
     var todoListNames: [String] {
@@ -788,6 +925,7 @@ final class PanelController: ObservableObject {
         case .newThread: "New codex thread"
         case .focus: "New focus session"
         case .todo: showingPastTodos ? "Past todos" : "Todo"
+        case .todoDetail: "Todo"
         }
     }
 
@@ -861,6 +999,8 @@ final class PanelController: ObservableObject {
                 + composerHeight
                 + CGFloat(visibleRows) * TodoLayoutMetrics.rowHeight
                 + TodoLayoutMetrics.bottomPadding
+        case .todoDetail:
+            height = 310
         case .calendar:
             let visibleRows = min(6, max(2, calendarService.events.count))
             height = PanelMetrics.headerHeight + 38 + CGFloat(visibleRows) * 40 + 8
@@ -978,6 +1118,8 @@ final class PanelController: ObservableObject {
         noteAutosaveTask = nil
         noteReloadTask?.cancel()
         noteReloadTask = nil
+        todoAutosaveTask?.cancel()
+        todoAutosaveTask = nil
         desktopSyncDebounceTask?.cancel()
         desktopSyncDebounceTask = nil
         desktopSyncTimer?.invalidate()
@@ -989,6 +1131,8 @@ final class PanelController: ObservableObject {
         messageProviderBackfillInFlight = false
         if contentMode == .note {
             saveLocalDocument(kind: .note, announce: false)
+        } else if case .todoDetail = contentMode {
+            saveTodoDetail(announce: false)
         }
         refreshTimer?.invalidate()
         refreshTimer = nil
@@ -1326,6 +1470,7 @@ final class PanelController: ObservableObject {
                         todos = nextTodos
                         todosAreAuthoritative = true
                         todoFileIssue = nil
+                        reconcileTodoDetailSelection()
                         resizeExpandedPanel()
                     } catch {
                         todosAreAuthoritative = false
@@ -1337,6 +1482,7 @@ final class PanelController: ObservableObject {
                 // They remain in memory only; retryUnavailableTodoSources performs the
                 // authoritative merge after the file materializes.
                 todos = nextTodos
+                reconcileTodoDetailSelection()
                 resizeExpandedPanel()
             }
 
@@ -1375,6 +1521,8 @@ final class PanelController: ObservableObject {
             self.selectedMessageConversationID = nil
         }
         noteCount = state.noteCount
+        syncedCalendarEvents = state.calendarEvents
+        syncedArtifactMentions = state.artifactMentions
         cloudSyncStatus = state.status
         cloudSyncPendingRecordCount = state.pendingRecordCount
         if state.status.phase == .syncing {
@@ -1400,6 +1548,7 @@ final class PanelController: ObservableObject {
                     }
                 }
                 todos = merged.values.sorted { $0.createdAt > $1.createdAt }
+                reconcileTodoDetailSelection()
                 try todoStore.save(todos)
                 todosAreAuthoritative = true
                 todoFileIssue = nil
@@ -1427,6 +1576,59 @@ final class PanelController: ObservableObject {
     private func updateTodoStorageIssue() {
         let issues = [todoFileIssue, todoListFileIssue].compactMap { $0 }
         todoStorageIssue = issues.isEmpty ? nil : issues.joined(separator: " ")
+    }
+
+    private func reconcileTodoDetailSelection() {
+        guard let selectedTodoID else { return }
+        guard let todo = todos.first(where: { $0.id == selectedTodoID }) else {
+            resetTodoDetailPresentation()
+            contentMode = .todo
+            statusMessage = "That todo is no longer available."
+            return
+        }
+
+        let remoteTitleChanged = todo.title != todoEditorBaseTitle
+        let remoteNotesChanged = todo.notes != todoEditorBaseNotes
+        guard remoteTitleChanged || remoteNotesChanged else { return }
+
+        let draftTitle = todoEditorTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let draftNotes = normalizedTodoNotes(todoEditorNotes)
+        let titleWasEdited = draftTitle != todoEditorBaseTitle
+        let notesWereEdited = draftNotes != todoEditorBaseNotes
+        let titleConflicts = titleWasEdited
+            && remoteTitleChanged
+            && draftTitle != todo.title
+        let notesConflict = notesWereEdited
+            && remoteNotesChanged
+            && draftNotes != todo.notes
+
+        todoEditorBaseTitle = todo.title
+        todoEditorBaseNotes = todo.notes
+        if !titleWasEdited {
+            todoEditorTitle = todo.title
+        }
+        if !notesWereEdited {
+            todoEditorNotes = todo.notes ?? ""
+        }
+
+        let rebasedTitle = todoEditorTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rebasedNotes = normalizedTodoNotes(todoEditorNotes)
+        todoEditorHasUnsavedChanges = rebasedTitle != todoEditorBaseTitle
+            || rebasedNotes != todoEditorBaseNotes
+        todoEditorHasRemoteConflict = titleConflicts || notesConflict
+
+        if todoEditorHasRemoteConflict {
+            todoAutosaveTask?.cancel()
+            todoAutosaveTask = nil
+            let message = "This todo changed on another device. Your edits are preserved; press Command-S to keep them."
+            todoSaveState = .failed(message)
+            statusMessage = message
+        } else if !todoEditorHasUnsavedChanges {
+            todoAutosaveTask?.cancel()
+            todoAutosaveTask = nil
+            todoSaveState = .saved
+            statusMessage = nil
+        }
     }
 
     func syncNow() {
@@ -1587,8 +1789,17 @@ final class PanelController: ObservableObject {
         window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
         if let contentView = window.contentView {
-            if contentMode == .note,
-               !noteFindVisible,
+            let shouldFocusMarkdownEditor: Bool
+            switch contentMode {
+            case .note:
+                shouldFocusMarkdownEditor = !noteFindVisible
+            case .todoDetail:
+                shouldFocusMarkdownEditor = !todoFindVisible
+            default:
+                shouldFocusMarkdownEditor = false
+            }
+
+            if shouldFocusMarkdownEditor,
                let noteEditor = markdownEditorTextView(in: contentView)
             {
                 window.makeFirstResponder(noteEditor)
@@ -1645,6 +1856,7 @@ final class PanelController: ObservableObject {
     }
 
     func showCreationMenu() {
+        guard flushCurrentEditorIfNeeded() else { return }
         if dictation.isRecording || dictationTargetThreadID != nil {
             cancelDictation()
         }
@@ -1656,6 +1868,7 @@ final class PanelController: ObservableObject {
     }
 
     func showHome() {
+        guard flushCurrentEditorIfNeeded() else { return }
         dictation.cancel()
         isStartingDictation = false
         dictationTargetThreadID = nil
@@ -1666,6 +1879,7 @@ final class PanelController: ObservableObject {
     }
 
     func showThreads() {
+        guard flushCurrentEditorIfNeeded() else { return }
         contentMode = .threads
         selectedThreadID = nil
         hoveredThreadID = nil
@@ -1746,16 +1960,136 @@ final class PanelController: ObservableObject {
     }
 
     func showCalendar() {
+        guard flushCurrentEditorIfNeeded() else { return }
         calendarService.start()
+        routedCalendarEventID = nil
         contentMode = .calendar
         statusMessage = nil
     }
 
     func showTodos() {
+        guard flushCurrentEditorIfNeeded() else { return }
         showingPastTodos = false
+        routedTodoID = nil
         contentMode = .todo
         statusMessage = nil
         requestTodoComposerFocus()
+    }
+
+    /// Handles links authored into rich note text. Artifact routes target the
+    /// concrete row/document/task where the local source is available and
+    /// otherwise fall back to the containing section with a calm status.
+    func openArtifactLink(_ url: URL) {
+        guard let destination = IAgentDeepLink(url: url) else { return }
+
+        switch destination {
+        case .todos:
+            showTodos()
+        case .createTodo:
+            showTodos()
+            requestTodoComposerFocus()
+        case .todo(let id):
+            routeToTodo(id)
+        case .notes:
+            openLocalNotesFolder()
+        case .createNote:
+            openNewNote(source: "artifact-link")
+        case .note(let id):
+            Task { [weak self] in
+                guard let self else { return }
+                if let document = await self.desktopSync.localDocument(noteID: id) {
+                    self.openMentionedDocument(document)
+                } else {
+                    self.openLocalNotesFolder()
+                    self.statusMessage = "That note is not available on this Mac."
+                }
+            }
+        case .notePath(let relativePath):
+            if let document = documentStore.load(relativePath: relativePath),
+               document.kind == .note
+            {
+                openMentionedDocument(document)
+            } else {
+                openLocalNotesFolder()
+                statusMessage = "That note is not available on this Mac."
+            }
+        case .calendar:
+            showCalendar()
+        case .calendarEvent(let id):
+            routeToCalendarEvent(id)
+        case .meetingReady:
+            showCalendar()
+        case .codex:
+            showThreads()
+        case .createCodexRequest:
+            guard flushCurrentEditorIfNeeded() else { return }
+            resetSharedEditorDraft(for: .codexThread)
+            contentMode = .newThread
+        case .codexThread(let id):
+            if let thread = threads.first(where: { $0.id == id }) {
+                openThread(thread)
+            } else {
+                showThreads()
+                statusMessage = "That Codex task is no longer available."
+            }
+        }
+
+        setExpanded(true, source: "artifact-link")
+    }
+
+    private func routeToTodo(_ id: UUID) {
+        guard flushCurrentEditorIfNeeded() else { return }
+        guard let todo = todos.first(where: { $0.id == id }) else {
+            showingPastTodos = false
+            routedTodoID = nil
+            contentMode = .todo
+            statusMessage = "That todo is no longer available."
+            return
+        }
+        showingPastTodos = todo.isCompleted
+        routedTodoID = id
+        contentMode = .todo
+        statusMessage = nil
+    }
+
+    private func routeToCalendarEvent(_ id: String) {
+        guard flushCurrentEditorIfNeeded() else { return }
+        calendarService.start()
+        contentMode = .calendar
+        let event = calendarService.events.first(where: { $0.id == id })
+            ?? syncedCalendarEvents.first(where: { $0.deletedAt == nil && $0.id == id })
+                .flatMap { target in
+                    calendarService.events.first {
+                        target.isSameOccurrence(as: syncedCalendarEvent(from: $0))
+                    }
+                }
+        guard let event else {
+            routedCalendarEventID = nil
+            statusMessage = "That calendar event is not available today."
+            return
+        }
+        routedCalendarEventID = event.id
+        statusMessage = nil
+    }
+
+    private func openMentionedDocument(_ document: LocalDocument) {
+        guard flushCurrentEditorIfNeeded() else { return }
+        resetMeetingNotePresentation()
+        dictation.cancel()
+        isStartingDictation = false
+        dictationTargetThreadID = nil
+        selectedCreationOption = .note
+        lastSavedDocument = document
+        editorTitle = document.title
+        editorBody = document.body
+        noteEditorDocumentID = document.id
+        noteShowsRawMarkdown = false
+        noteFindVisible = false
+        noteSaveState = .saved
+        statusMessage = nil
+        contentMode = .note
+        setExpanded(true, source: "artifact-note")
+        requestNoteEditorFocus()
     }
 
     func openHomeSection(_ section: HomeSection) {
@@ -1856,9 +2190,7 @@ final class PanelController: ObservableObject {
             return
         }
 
-        if contentMode == .note, !flushCurrentNoteIfNeeded() {
-            return
-        }
+        guard flushCurrentEditorIfNeeded() else { return }
 
         resetMeetingNotePresentation()
         dictation.cancel()
@@ -1960,12 +2292,218 @@ final class PanelController: ObservableObject {
         noteSaveState = .idle
     }
 
+    private func resetTodoDetailPresentation() {
+        todoAutosaveTask?.cancel()
+        todoAutosaveTask = nil
+        todoEditorBaseTitle = ""
+        todoEditorBaseNotes = nil
+        todoEditorHasUnsavedChanges = false
+        todoEditorHasRemoteConflict = false
+        todoEditorTitle = ""
+        todoEditorNotes = ""
+        todoShowsRawMarkdown = false
+        todoFindVisible = false
+        todoSaveState = .idle
+    }
+
+    private func loadTodoDetailDraft(from todo: LocalTodo) {
+        todoAutosaveTask?.cancel()
+        todoAutosaveTask = nil
+        todoEditorBaseTitle = todo.title
+        todoEditorBaseNotes = todo.notes
+        todoEditorHasUnsavedChanges = false
+        todoEditorHasRemoteConflict = false
+        todoEditorTitle = todo.title
+        todoEditorNotes = todo.notes ?? ""
+        todoSaveState = .saved
+    }
+
+    private var todoRemoteConflictMessage: String {
+        "This todo changed on another device. Your edits are preserved; press Command-S to keep them."
+    }
+
+    private func normalizedTodoNotes(_ value: String) -> String? {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
+    }
+
     func requestTodoComposerFocus() {
         todoComposerFocusRequest += 1
     }
 
     func setTodoComposerFocused(_ focused: Bool) {
         todoComposerIsFocused = focused
+    }
+
+    func openTodo(_ id: UUID) {
+        if let selectedTodoID, selectedTodoID != id {
+            guard flushCurrentEditorIfNeeded() else { return }
+        }
+        guard let todo = todos.first(where: { $0.id == id }) else { return }
+
+        loadTodoDetailDraft(from: todo)
+        todoShowsRawMarkdown = false
+        todoFindVisible = false
+        statusMessage = nil
+        contentMode = .todoDetail(id)
+        setExpanded(true, source: "todo-detail")
+        requestTodoEditorFocus()
+    }
+
+    func closeTodoDetail() {
+        guard case .todoDetail = contentMode else { return }
+        guard selectedTodo != nil else {
+            resetTodoDetailPresentation()
+            contentMode = .todo
+            return
+        }
+        guard flushCurrentEditorIfNeeded(announceTodoFailure: true) else { return }
+
+        contentMode = .todo
+        statusMessage = nil
+    }
+
+    func requestTodoEditorFocus() {
+        todoEditorFocusRequest += 1
+        focusPanelForKeyboardNavigation()
+        DispatchQueue.main.async { [weak self] in
+            self?.focusPanelForKeyboardNavigation()
+        }
+    }
+
+    func todoDetailDraftDidChange() {
+        guard let todo = selectedTodo else { return }
+
+        let title = todoEditorTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let notes = normalizedTodoNotes(todoEditorNotes)
+        todoEditorHasUnsavedChanges = title != todoEditorBaseTitle
+            || notes != todoEditorBaseNotes
+        if !todoEditorHasUnsavedChanges {
+            todoAutosaveTask?.cancel()
+            todoAutosaveTask = nil
+            todoEditorHasRemoteConflict = false
+            todoSaveState = .saved
+            statusMessage = nil
+            return
+        }
+
+        if todoEditorHasRemoteConflict {
+            todoAutosaveTask?.cancel()
+            todoAutosaveTask = nil
+            todoSaveState = .failed(todoRemoteConflictMessage)
+            statusMessage = todoRemoteConflictMessage
+            return
+        }
+
+        todoAutosaveTask?.cancel()
+        guard !title.isEmpty else {
+            todoSaveState = .idle
+            return
+        }
+
+        let todoID = todo.id
+        todoSaveState = .saving
+        statusMessage = nil
+        todoAutosaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(650))
+            guard !Task.isCancelled,
+                  let self,
+                  self.selectedTodoID == todoID
+            else { return }
+            self.saveTodoDetail(announce: false)
+            self.todoAutosaveTask = nil
+        }
+    }
+
+    func toggleTodoFind() {
+        todoFindVisible.toggle()
+        if !todoFindVisible {
+            requestTodoEditorFocus()
+        }
+    }
+
+    func toggleTodoSourceMode() {
+        todoShowsRawMarkdown.toggle()
+        requestTodoEditorFocus()
+    }
+
+    @discardableResult
+    func saveTodoDetail(
+        announce: Bool = true,
+        resolveConflict: Bool = false
+    ) -> Bool {
+        guard let id = selectedTodoID,
+              let index = todos.firstIndex(where: { $0.id == id })
+        else {
+            let message = "This todo is no longer available."
+            todoSaveState = .failed(message)
+            statusMessage = announce ? message : nil
+            return false
+        }
+
+        let title = todoEditorTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            let message = "Add a title before leaving this todo."
+            todoSaveState = .failed(message)
+            statusMessage = announce ? message : nil
+            return false
+        }
+
+        let notes = normalizedTodoNotes(todoEditorNotes)
+        todoEditorHasUnsavedChanges = title != todoEditorBaseTitle
+            || notes != todoEditorBaseNotes
+        if !todoEditorHasUnsavedChanges {
+            todoEditorHasRemoteConflict = false
+            todoSaveState = .saved
+            statusMessage = nil
+            return true
+        }
+
+        if todoEditorHasRemoteConflict, !resolveConflict {
+            todoSaveState = .failed(todoRemoteConflictMessage)
+            statusMessage = announce ? todoRemoteConflictMessage : nil
+            return false
+        }
+
+        guard todosAreAuthoritative else {
+            let message = todoFileIssue
+                ?? "Todos are read-only until the iCloud file finishes downloading."
+            todoSaveState = .failed(message)
+            statusMessage = announce ? message : nil
+            return false
+        }
+
+        let originalTodo = todos[index]
+        todos[index].title = title
+        todos[index].notes = notes
+        todos[index].updatedAt = Date()
+        todoEditorTitle = title
+
+        if saveTodos() {
+            todoEditorBaseTitle = title
+            todoEditorBaseNotes = notes
+            todoEditorHasUnsavedChanges = false
+            todoEditorHasRemoteConflict = false
+            todoSaveState = .saved
+            statusMessage = nil
+            return true
+        }
+
+        todos[index] = originalTodo
+        let message = statusMessage ?? "Could not save the todo."
+        todoSaveState = .failed(message)
+        statusMessage = announce ? message : nil
+        return false
+    }
+
+    func deleteSelectedTodo() {
+        guard let id = selectedTodoID else { return }
+        guard deleteTodo(id) else {
+            let message = statusMessage ?? "Could not delete the todo."
+            todoSaveState = .failed(message)
+            return
+        }
+        resetTodoDetailPresentation()
+        contentMode = .todo
     }
 
     @discardableResult
@@ -2112,17 +2650,36 @@ final class PanelController: ObservableObject {
         resizeExpandedPanel()
     }
 
-    func deleteTodo(_ id: UUID) {
-        guard canEditTodos else { return }
+    @discardableResult
+    func deleteTodo(_ id: UUID) -> Bool {
+        guard canEditTodos else { return false }
+        guard todos.contains(where: { $0.id == id }) else { return false }
+
+        let nextTodos = todos.filter { $0.id != id }
+        do {
+            try todoStore.save(nextTodos)
+        } catch {
+            todosAreAuthoritative = false
+            todoFileIssue = error.localizedDescription
+            updateTodoStorageIssue()
+            statusMessage = "Could not delete todo: \(error.localizedDescription)"
+            return false
+        }
+
         todoCompletionTasks[id]?.cancel()
         todoCompletionTasks[id] = nil
         withAnimation(.spring(response: 0.26, dampingFraction: 0.9, blendDuration: 0.04)) {
-            todos.removeAll { $0.id == id }
+            todos = nextTodos
             completingTodoIDs.remove(id)
             fadingTodoIDs.remove(id)
         }
-        saveTodos()
+        todosAreAuthoritative = true
+        todoFileIssue = nil
+        updateTodoStorageIssue()
+        statusMessage = nil
+        scheduleDesktopSync(fetchRemote: false)
         resizeExpandedPanel()
+        return true
     }
 
     private var canEditTodos: Bool {
@@ -2134,10 +2691,10 @@ final class PanelController: ObservableObject {
         return true
     }
 
-    private func persistTodoMutation(_ todo: LocalTodo) {
+    @discardableResult
+    private func persistTodoMutation(_ todo: LocalTodo) -> Bool {
         guard !todosAreAuthoritative else {
-            saveTodos()
-            return
+            return saveTodos()
         }
 
         // The canonical JSON file may be an iCloud placeholder. Never overwrite
@@ -2146,12 +2703,16 @@ final class PanelController: ObservableObject {
             guard let self else { return }
             let state = await self.desktopSync.publishTodoMutation(todo)
             self.noteCount = state.noteCount
+            self.syncedCalendarEvents = state.calendarEvents
+            self.syncedArtifactMentions = state.artifactMentions
             self.cloudSyncStatus = state.status
             self.cloudSyncPendingRecordCount = state.pendingRecordCount
         }
+        return true
     }
 
-    private func saveTodos() {
+    @discardableResult
+    private func saveTodos() -> Bool {
         do {
             try todoStore.save(todos)
             todosAreAuthoritative = true
@@ -2159,11 +2720,13 @@ final class PanelController: ObservableObject {
             updateTodoStorageIssue()
             statusMessage = nil
             scheduleDesktopSync(fetchRemote: false)
+            return true
         } catch {
             todosAreAuthoritative = false
             todoFileIssue = error.localizedDescription
             updateTodoStorageIssue()
             statusMessage = "Could not save todos: \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -2248,9 +2811,7 @@ final class PanelController: ObservableObject {
     }
 
     func returnHome() {
-        if contentMode == .note, !flushCurrentNoteIfNeeded() {
-            return
-        }
+        guard flushCurrentEditorIfNeeded() else { return }
         resetMeetingNotePresentation()
         dictation.cancel()
         isStartingDictation = false
@@ -2264,6 +2825,21 @@ final class PanelController: ObservableObject {
         noteSaveState = .idle
         statusMessage = nil
         isSubmitting = false
+    }
+
+    func navigateBack() {
+        if case .todoDetail = contentMode {
+            closeTodoDetail()
+        } else {
+            returnHome()
+        }
+    }
+
+    var navigationBackHelp: String {
+        if case .todoDetail = contentMode {
+            return showingPastTodos ? "Back to past todos" : "Back to todos"
+        }
+        return "Back to Home"
     }
 
     func toggleDictation() {
@@ -2284,9 +2860,7 @@ final class PanelController: ObservableObject {
             selectedThreadID = targetThreadID
             contentMode = .threads
         } else {
-            if contentMode == .note, !flushCurrentNoteIfNeeded() {
-                return
-            }
+            guard flushCurrentEditorIfNeeded() else { return }
             resetMeetingNotePresentation()
             isStartingDictation = true
             dictationTargetThreadID = nil
@@ -2353,6 +2927,10 @@ final class PanelController: ObservableObject {
             noteAutosaveTask?.cancel()
             noteAutosaveTask = nil
             saveLocalDocument(kind: .note)
+        case .todoDetail:
+            todoAutosaveTask?.cancel()
+            todoAutosaveTask = nil
+            saveTodoDetail(resolveConflict: true)
         default:
             break
         }
@@ -2481,6 +3059,25 @@ final class PanelController: ObservableObject {
             || !editorBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private func flushCurrentEditorIfNeeded(
+        announceTodoFailure: Bool = false
+    ) -> Bool {
+        switch contentMode {
+        case .note:
+            return flushCurrentNoteIfNeeded()
+        case .todoDetail:
+            guard selectedTodo != nil else {
+                resetTodoDetailPresentation()
+                return true
+            }
+            guard flushCurrentTodoIfNeeded(announce: announceTodoFailure) else { return false }
+            resetTodoDetailPresentation()
+            return true
+        default:
+            return true
+        }
+    }
+
     @discardableResult
     private func flushCurrentNoteIfNeeded() -> Bool {
         noteAutosaveTask?.cancel()
@@ -2490,6 +3087,12 @@ final class PanelController: ObservableObject {
             return true
         }
         return saveLocalDocument(kind: .note, announce: false)
+    }
+
+    private func flushCurrentTodoIfNeeded(announce: Bool = false) -> Bool {
+        todoAutosaveTask?.cancel()
+        todoAutosaveTask = nil
+        return saveTodoDetail(announce: announce)
     }
 
     @discardableResult
@@ -2519,7 +3122,6 @@ final class PanelController: ObservableObject {
                 )
             }
             lastSavedDocument = document
-            editorTitle = document.title
             if kind == .note {
                 noteCount = documentStore.documentCount(for: .note)
                 reloadNotes()
@@ -2580,7 +3182,7 @@ final class PanelController: ObservableObject {
             if contentMode == .messages, selectedMessageConversationID != nil {
                 closeMessageConversation()
             } else {
-                returnHome()
+                navigateBack()
             }
             return true
         }
@@ -2601,7 +3203,15 @@ final class PanelController: ObservableObject {
             return true
         }
 
-        if contentMode == .note, modifiers.contains(.command) {
+        let isMarkdownEditorMode: Bool
+        switch contentMode {
+        case .note, .todoDetail:
+            isMarkdownEditorMode = true
+        default:
+            isMarkdownEditorMode = false
+        }
+
+        if isMarkdownEditorMode, modifiers.contains(.command) {
             let hasShift = modifiers.contains(.shift)
             let hasOption = modifiers.contains(.option)
             let editorIsFocused = noteEditorHasKeyboardFocus
@@ -2611,7 +3221,11 @@ final class PanelController: ObservableObject {
                 saveCurrentDocument()
                 return true
             case kVK_ANSI_F:
-                noteFindVisible = true
+                if case .todoDetail = contentMode {
+                    todoFindVisible = true
+                } else {
+                    noteFindVisible = true
+                }
                 return true
             case kVK_ANSI_B where editorIsFocused && !hasShift && !hasOption:
                 NoteEditorFormatting.applyBold()
@@ -2650,7 +3264,7 @@ final class PanelController: ObservableObject {
 
         if modifiers.contains(.command), keyCode == 36 || keyCode == 76 {
             switch contentMode {
-            case .note:
+            case .note, .todoDetail:
                 saveCurrentDocument()
                 return true
             case .newThread:
@@ -4314,6 +4928,7 @@ final class PanelController: ObservableObject {
                     LocalTodo(
                         id: UUID(),
                         title: "Archive the finished task",
+                        notes: "Keep the release link here.\n\n- [ ] Confirm the archive",
                         isCompleted: false,
                         createdAt: Date().addingTimeInterval(-240)
                     ),
@@ -4394,6 +5009,47 @@ final class PanelController: ObservableObject {
                     throw SmokeError("Expected todos to persist in a compact, top-pinned view.")
                 }
                 let todoURL = try self.capturePNG(named: "iagent-todo-list.png")
+
+                let detailTodoID = self.todos[2].id
+                self.openTodo(detailTodoID)
+                try await Task.sleep(for: .milliseconds(380))
+                guard case let .todoDetail(openedTodoID) = self.contentMode,
+                      openedTodoID == detailTodoID,
+                      self.selectedTodoID == detailTodoID,
+                      self.todoEditorTitle == "Archive the finished task",
+                      self.todoEditorNotes.contains("Confirm the archive"),
+                      let contentView = window.contentView,
+                      let todoTextView = self.markdownEditorTextView(in: contentView),
+                      todoTextView.string.contains("Confirm the archive"),
+                      window.firstResponder === todoTextView,
+                      abs(window.frame.height - self.expandedSize.height) <= 2
+                else {
+                    throw SmokeError("Expected the todo detail route to mount and focus its note-style editor.")
+                }
+                let todoDetailURL = try self.capturePNG(named: "iagent-todo-detail.png")
+
+                self.todoEditorTitle = "Archive the release task"
+                self.todoEditorNotes += "\n\nOwner: Platon"
+                var persistedDetailTodo: LocalTodo?
+                for _ in 0 ..< 80 {
+                    try await Task.sleep(for: .milliseconds(25))
+                    persistedDetailTodo = try self.todoStore.load().first { $0.id == detailTodoID }
+                    if persistedDetailTodo?.title == "Archive the release task",
+                       persistedDetailTodo?.notes?.contains("Owner: Platon") == true,
+                       self.todoSaveState == .saved
+                    {
+                        break
+                    }
+                }
+                guard persistedDetailTodo?.title == "Archive the release task",
+                      persistedDetailTodo?.notes?.contains("Owner: Platon") == true,
+                      self.todoSaveState == .saved,
+                      self.handleKeyCode(53),
+                      self.contentMode == .todo
+                else {
+                    throw SmokeError("Expected todo details to autosave and Escape to return to the todo list.")
+                }
+                try await Task.sleep(for: .milliseconds(300))
 
                 self.toggleTodoHistory()
                 try await Task.sleep(for: .milliseconds(380))
@@ -4725,7 +5381,8 @@ final class PanelController: ObservableObject {
                 }
                 guard let autosaved = self.lastSavedDocument,
                       FileManager.default.fileExists(atPath: autosaved.fileURL.path),
-                      self.editorTitle == "Project note",
+                      self.editorTitle.isEmpty,
+                      autosaved.title == "Untitled note",
                       autosaved.body == self.editorBody,
                       self.noteSaveState == .saved,
                       self.handleKeyEvent(UInt16(kVK_ANSI_F), modifiers: [.command]),
@@ -5257,6 +5914,7 @@ final class PanelController: ObservableObject {
                 print("[smoke] todoStrikeScreenshot=\(todoStrikeURL.path)")
                 print("[smoke] todoFadeScreenshot=\(todoFadeURL.path)")
                 print("[smoke] todoScreenshot=\(todoURL.path)")
+                print("[smoke] todoDetailScreenshot=\(todoDetailURL.path)")
                 print("[smoke] todoHistoryScreenshot=\(todoHistoryURL.path)")
                 print("[smoke] homeMountScreenshot=\(homeMountURL.path)")
                 print("[smoke] homeScreenshot=\(homeURL.path)")
@@ -5896,6 +6554,8 @@ struct ExpandedPanel: View {
             FocusSessionView(controller: controller)
         case .todo:
             TodoListView(controller: controller)
+        case .todoDetail:
+            TodoDetailView(controller: controller)
         case .calendar:
             CalendarDayView(controller: controller)
         }
@@ -5907,7 +6567,7 @@ struct ExpandedPanel: View {
             titleRole: headerTitleRole,
             placement: controller.contentMode == .home ? .root : .navigation,
             onBack: headerBackAction,
-            backHelp: "Back to Home"
+            backHelp: controller.navigationBackHelp
         ) {
             if controller.contentMode == .messages {
                 messageHeaderFilterButton(
@@ -5957,7 +6617,6 @@ struct ExpandedPanel: View {
                 .help(controller.cloudSyncHelpText)
                 .accessibilityLabel(controller.cloudSyncHelpText)
             }
-
             if controller.contentMode == .threads {
                 HStack(spacing: 6) {
                     Circle()
@@ -6030,7 +6689,7 @@ struct ExpandedPanel: View {
             if controller.contentMode == .messages {
                 controller.navigateBackFromMessages()
             } else {
-                controller.returnHome()
+                controller.navigateBack()
             }
         }
     }
@@ -6098,6 +6757,17 @@ struct ExpandedPanel: View {
         case .failed:
             .agentCoral
         }
+    }
+
+    private var headerTitleFont: Font {
+        if controller.contentMode == .home {
+            return .system(size: 10, weight: .semibold)
+        }
+        return .system(size: 12, weight: .semibold)
+    }
+
+    private var headerTitleColor: Color {
+        controller.contentMode == .home ? .white.opacity(0.56) : .white.opacity(0.96)
     }
 
     private var threadList: some View {
@@ -6772,9 +7442,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var visibilityHotKey: GlobalHotKey?
     private var automaticTerminationDisabled = false
     private var terminationTask: Task<Void, Never>?
+    private var pendingArtifactLinks: [URL] = []
 
     private static let automaticTerminationReason =
         "iAgent global shortcuts must remain available while its panel is hidden."
+
+    func application(_: NSApplication, open urls: [URL]) {
+        guard let controller else {
+            pendingArtifactLinks.append(contentsOf: urls)
+            return
+        }
+        for url in urls {
+            controller.openArtifactLink(url)
+        }
+    }
 
     func applicationDidFinishLaunching(_: Notification) {
         let isSmokeTest = CommandLine.arguments.contains("--smoke-test")
@@ -6832,6 +7513,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         controller.attach(window: panel)
         controller.startThreadUpdates()
+        if !pendingArtifactLinks.isEmpty {
+            let links = pendingArtifactLinks
+            pendingArtifactLinks.removeAll()
+            for url in links {
+                controller.openArtifactLink(url)
+            }
+        }
 
         let panelHotKey = GlobalHotKey(
             identifier: 1,

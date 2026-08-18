@@ -38,6 +38,8 @@ struct DesktopWritableSyncState: Sendable {
   let messages: [SyncedMessage]
   let messageReadStates: [SyncedMessageReadState]
   let messageRelayStates: [SyncedMessageRelayState]
+  let calendarEvents: [SyncedCalendarEvent]
+  let artifactMentions: [ArtifactMention]
   let status: IAgentCloudSyncStatus
   let pendingRecordCount: Int
 }
@@ -198,6 +200,8 @@ actor DesktopSyncCoordinator {
         messages: snapshot.messages,
         messageReadStates: snapshot.messageReadStates,
         messageRelayStates: snapshot.messageRelayStates,
+        calendarEvents: snapshot.calendarEvents,
+        artifactMentions: ArtifactMentionCatalog.make(snapshot: snapshot),
         status: IAgentCloudSyncStatus(phase: .failed, message: error.localizedDescription),
         pendingRecordCount: snapshot.pendingRecordNames
           .union(snapshot.pendingDeletionRecordNames).count
@@ -429,6 +433,8 @@ actor DesktopSyncCoordinator {
         messages: snapshot.messages,
         messageReadStates: snapshot.messageReadStates,
         messageRelayStates: snapshot.messageRelayStates,
+        calendarEvents: snapshot.calendarEvents,
+        artifactMentions: ArtifactMentionCatalog.make(snapshot: snapshot),
         status: IAgentCloudSyncStatus(phase: .failed, message: error.localizedDescription),
         pendingRecordCount: snapshot.pendingRecordNames
           .union(snapshot.pendingDeletionRecordNames).count
@@ -457,6 +463,15 @@ actor DesktopSyncCoordinator {
 
   func stop() async {
     await cloud?.stop()
+  }
+
+  /// Resolves legacy UUID note links to the same portable library document
+  /// used by path-based links. New authored mentions use notePath directly,
+  /// but existing links remain useful after the routing upgrade.
+  func localDocument(noteID: UUID) -> LocalDocument? {
+    guard let relativePath = noteIndex.entries.first(where: { $0.value.id == noteID })?.key
+    else { return nil }
+    return documentStore.load(relativePath: relativePath)
   }
 
   func mergeRemoteForTesting(_ payloads: [IAgentSyncPayload]) async throws {
@@ -1018,6 +1033,8 @@ actor DesktopSyncCoordinator {
       messages: snapshot.messages,
       messageReadStates: snapshot.messageReadStates,
       messageRelayStates: snapshot.messageRelayStates,
+      calendarEvents: snapshot.calendarEvents,
+      artifactMentions: ArtifactMentionCatalog.make(snapshot: snapshot),
       status: status,
       pendingRecordCount: snapshot.pendingRecordNames
         .union(snapshot.pendingDeletionRecordNames).count

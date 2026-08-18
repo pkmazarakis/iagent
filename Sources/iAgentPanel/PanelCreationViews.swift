@@ -287,6 +287,7 @@ struct CreationMenuView: View {
 
 struct FocusSessionView: View {
     @ObservedObject var controller: PanelController
+    @FocusState private var inputFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -300,9 +301,16 @@ struct FocusSessionView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.9))
+                    .focused($inputFocused)
                     .onSubmit {
                         controller.toggleFocusSession()
                     }
+                    .artifactMentionPicker(
+                        text: $controller.focusTask,
+                        mentions: controller.artifactMentions,
+                        writesMarkdown: false,
+                        isActive: inputFocused
+                    )
             }
             .padding(.horizontal, PanelPageLayout.contentInset)
             .frame(height: 42)
@@ -387,6 +395,7 @@ struct FocusSessionView: View {
             .padding(.horizontal, PanelPageLayout.contentInset)
             .frame(height: 100)
         }
+        .onAppear { inputFocused = true }
     }
 }
 
@@ -434,6 +443,12 @@ struct LocalDocumentEditorView: View {
                     .onSubmit {
                         controller.requestNoteEditorFocus()
                     }
+                    .artifactMentionPicker(
+                        text: $controller.editorTitle,
+                        mentions: controller.artifactMentions,
+                        writesMarkdown: false,
+                        isActive: titleFocused
+                    )
 
                 if kind == .note, !showingVoiceCapture {
                     NoteSaveIndicator(state: controller.noteSaveState)
@@ -549,6 +564,13 @@ struct LocalDocumentEditorView: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .artifactMentionPicker(
+            text: $controller.editorBody,
+            mentions: controller.artifactMentions,
+            writesMarkdown: true,
+            isActive: !titleFocused && !showingVoiceCapture,
+            requiresFirstResponderInsideAnchor: true
+        )
     }
 
     private var editorFooter: some View {
@@ -1374,6 +1396,7 @@ private struct EnhancingNotesPill: View {
 
 private struct NoteSaveIndicator: View {
     let state: NoteSaveState
+    var accessibilityPrefix = "note"
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -1399,7 +1422,7 @@ private struct NoteSaveIndicator: View {
         .accessibilityLabel(helpText)
         .accessibilityHidden(state == .idle)
         .accessibilityAddTraits(.updatesFrequently)
-        .accessibilityIdentifier("note-save-status")
+        .accessibilityIdentifier("\(accessibilityPrefix)-save-status")
     }
 
     private var helpText: String {
@@ -1463,24 +1486,33 @@ struct TodoListView: View {
                 VStack(spacing: 0) {
                     todoComposer
 
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            if controller.visibleTodos.isEmpty {
-                                todoEmptyState("No open todos")
-                            } else {
-                                ForEach(controller.visibleTodos) { todo in
-                                    todoRow(todo, isHistory: false)
-                                        .transition(
-                                            .asymmetric(
-                                                insertion: .offset(y: -8).combined(with: .opacity),
-                                                removal: .identity
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                if controller.visibleTodos.isEmpty {
+                                    todoEmptyState("No open todos")
+                                } else {
+                                    ForEach(controller.visibleTodos) { todo in
+                                        todoRow(todo, isHistory: false)
+                                            .transition(
+                                                .asymmetric(
+                                                    insertion: .offset(y: -8).combined(with: .opacity),
+                                                    removal: .identity
+                                                )
                                             )
-                                        )
+                                    }
                                 }
                             }
                         }
+                        .scrollIndicators(.hidden)
+                        .task(id: controller.routedTodoID) {
+                            guard let id = controller.routedTodoID,
+                                  controller.visibleTodos.contains(where: { $0.id == id })
+                            else { return }
+                            await Task.yield()
+                            proxy.scrollTo(id, anchor: .center)
+                        }
                     }
-                    .scrollIndicators(.hidden)
 
                     Color.clear
                         .frame(height: TodoLayoutMetrics.bottomPadding)
@@ -1516,18 +1548,27 @@ struct TodoListView: View {
 
     private var pastTodoList: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    if controller.pastTodos.isEmpty {
-                        todoEmptyState("No completed todos yet")
-                    } else {
-                        ForEach(controller.pastTodos) { todo in
-                            todoRow(todo, isHistory: true)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        if controller.pastTodos.isEmpty {
+                            todoEmptyState("No completed todos yet")
+                        } else {
+                            ForEach(controller.pastTodos) { todo in
+                                todoRow(todo, isHistory: true)
+                            }
                         }
                     }
                 }
+                .scrollIndicators(.hidden)
+                .task(id: controller.routedTodoID) {
+                    guard let id = controller.routedTodoID,
+                          controller.pastTodos.contains(where: { $0.id == id })
+                    else { return }
+                    await Task.yield()
+                    proxy.scrollTo(id, anchor: .center)
+                }
             }
-            .scrollIndicators(.hidden)
 
             Color.clear
                 .frame(height: TodoLayoutMetrics.bottomPadding)
@@ -1550,12 +1591,21 @@ struct TodoListView: View {
             availableListNames: controller.todoListNames,
             animatesCompletion: controller.completingTodoIDs.contains(todo.id),
             showsHistoryMetadata: isHistory,
+            onOpen: { controller.openTodo(todo.id) },
             onToggle: { controller.toggleTodo(todo.id) },
             onToggleStar: { controller.toggleTodoStar(todo.id) },
             onSetDueDate: { controller.setTodoDueDate(todo.id, dueDate: $0) },
             onSetList: { controller.setTodoList(todo.id, listName: $0) },
             onDelete: { controller.deleteTodo(todo.id) }
         )
+        .id(todo.id)
+        .background {
+            if controller.routedTodoID == todo.id {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.agentBlue.opacity(0.13))
+                    .padding(.horizontal, 6)
+            }
+        }
     }
 
     private var todoComposer: some View {
@@ -1586,6 +1636,12 @@ struct TodoListView: View {
                     .foregroundStyle(.white.opacity(0.9))
                     .focused($inputFocused)
                     .onSubmit(submitTodo)
+                    .artifactMentionPicker(
+                        text: $controller.todoDraft,
+                        mentions: controller.artifactMentions,
+                        writesMarkdown: false,
+                        isActive: inputFocused
+                    )
 
                 Color.clear
                     .frame(width: 44 + 132 * composerFocusProgress)
@@ -1765,6 +1821,251 @@ struct TodoListView: View {
         }
     }
 
+}
+
+struct TodoDetailView: View {
+    @ObservedObject var controller: PanelController
+    @FocusState private var titleFocused: Bool
+    @State private var showingDueDatePicker = false
+    @State private var showingListPicker = false
+
+    var body: some View {
+        Group {
+            if let todo = controller.selectedTodo {
+                editor(for: todo)
+            } else {
+                unavailableState
+            }
+        }
+        .onChange(of: controller.todoEditorTitle) { _, _ in
+            controller.todoDetailDraftDidChange()
+        }
+        .onChange(of: controller.todoEditorNotes) { _, _ in
+            controller.todoDetailDraftDidChange()
+        }
+    }
+
+    private func editor(for todo: LocalTodo) -> some View {
+        VStack(spacing: 0) {
+            titleBar(for: todo)
+
+            metadataBar(for: todo)
+
+            if controller.todoFindVisible {
+                MarkdownNoteFindBar(isPresented: $controller.todoFindVisible)
+            }
+
+            MarkdownNoteEditor(
+                text: $controller.todoEditorNotes,
+                documentID: controller.todoEditorDocumentID,
+                rawSourceMode: controller.todoShowsRawMarkdown,
+                placeholder: "Add details, links, or a checklist",
+                accessibilityLabel: "Todo details",
+                accessibilityIdentifier: "todo-markdown-editor"
+            )
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            MarkdownFormattingToolbar(
+                rawSourceMode: controller.todoShowsRawMarkdown,
+                showFind: {
+                    controller.todoFindVisible = true
+                },
+                toggleSourceMode: {
+                    controller.toggleTodoSourceMode()
+                },
+                accessibilityPrefix: "todo"
+            )
+            .padding(.horizontal, 16)
+            .frame(height: 40)
+            .overlay(alignment: .top) {
+                Rectangle().fill(.white.opacity(0.065)).frame(height: 1)
+            }
+        }
+        .onAppear {
+            titleFocused = false
+            controller.requestTodoEditorFocus()
+        }
+        .accessibilityIdentifier("todo-detail")
+    }
+
+    private func titleBar(for todo: LocalTodo) -> some View {
+        HStack(spacing: 10) {
+            Button {
+                controller.toggleTodo(todo.id)
+            } label: {
+                ReferenceTodoCheckbox(
+                    fillProgress: todo.isCompleted ? 1 : 0,
+                    pinchProgress: 0,
+                    rightPullProgress: 0,
+                    pressScale: 1,
+                    checkProgress: todo.isCompleted ? 1 : 0
+                )
+            }
+            .buttonStyle(TodoCheckboxButtonStyle())
+            .help(todo.isCompleted ? "Mark incomplete" : "Mark complete")
+            .accessibilityLabel(todo.isCompleted ? "Mark incomplete" : "Mark complete")
+            .accessibilityValue(todo.isCompleted ? "Checked" : "Unchecked")
+            .accessibilityIdentifier("todo-detail-completion")
+
+            TextField("Untitled todo", text: $controller.todoEditorTitle)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.9))
+                .focused($titleFocused)
+                .layoutPriority(1)
+                .onSubmit {
+                    controller.requestTodoEditorFocus()
+                }
+                .accessibilityIdentifier("todo-detail-title")
+
+            NoteSaveIndicator(
+                state: controller.todoSaveState,
+                accessibilityPrefix: "todo"
+            )
+
+            Button {
+                controller.toggleTodoStar(todo.id)
+            } label: {
+                Image(systemName: todo.isStarred ? "star.fill" : "star")
+                    .foregroundStyle(todo.isStarred ? Color.agentAmber : Color.white.opacity(0.48))
+            }
+            .buttonStyle(EditorIconButtonStyle())
+            .help(todo.isStarred ? "Remove star" : "Star todo")
+            .accessibilityLabel(todo.isStarred ? "Remove star" : "Star todo")
+            .accessibilityIdentifier("todo-detail-star")
+        }
+        .padding(.leading, PanelPageLayout.contentInset)
+        .padding(.trailing, 16)
+        .frame(height: 42)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(.white.opacity(0.065)).frame(height: 1)
+        }
+    }
+
+    private func metadataBar(for todo: LocalTodo) -> some View {
+        HStack(spacing: 6) {
+            Button {
+                showingDueDatePicker.toggle()
+            } label: {
+                detailMetadataLabel(
+                    symbol: todo.dueDate == nil ? "calendar" : "calendar.badge.checkmark",
+                    title: todo.dueDate.map { todoDueDateText($0) } ?? "Add due date",
+                    color: todo.dueDate == nil ? .white.opacity(0.46) : .agentBlue
+                )
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showingDueDatePicker, arrowEdge: .bottom) {
+                TodoDueDatePopover(dueDate: todo.dueDate) { dueDate in
+                    controller.setTodoDueDate(todo.id, dueDate: dueDate)
+                }
+            }
+            .accessibilityIdentifier("todo-detail-due-date")
+
+            Button {
+                showingListPicker.toggle()
+            } label: {
+                detailMetadataLabel(
+                    symbol: "tray",
+                    title: todo.listName ?? "No list",
+                    color: .white.opacity(0.46)
+                )
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showingListPicker, arrowEdge: .bottom) {
+                TodoListPickerPopover(
+                    selectedList: todo.listName,
+                    availableLists: controller.todoListNames
+                ) { listName in
+                    controller.setTodoList(todo.id, listName: listName)
+                }
+            }
+            .accessibilityIdentifier("todo-detail-list")
+
+            Spacer(minLength: 8)
+
+            if case let .failed(message) = controller.todoSaveState {
+                Text(message)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Color.agentCoral.opacity(0.82))
+                    .lineLimit(1)
+                    .help(message)
+                    .accessibilityIdentifier("todo-detail-save-error")
+            } else {
+                Text(todoStatusText(todo))
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.3))
+                    .lineLimit(1)
+            }
+
+            Button {
+                controller.deleteSelectedTodo()
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(EditorIconButtonStyle())
+            .help("Delete todo")
+            .accessibilityLabel("Delete todo")
+            .accessibilityIdentifier("todo-detail-delete")
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 14)
+        .frame(height: 36)
+        .background(.white.opacity(0.018))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(.white.opacity(0.055)).frame(height: 1)
+        }
+    }
+
+    private func detailMetadataLabel(
+        symbol: String,
+        title: String,
+        color: Color
+    ) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol)
+                .font(.system(size: 9, weight: .semibold))
+            Text(title)
+                .font(.system(size: 9, weight: .medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 7)
+        .frame(height: 24)
+        .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(.white.opacity(0.045), lineWidth: 0.5)
+        }
+    }
+
+    private func todoStatusText(_ todo: LocalTodo) -> String {
+        if let completedAt = todo.completedAt, todo.isCompleted {
+            return "Completed \(completedAt.formatted(date: .abbreviated, time: .omitted))"
+        }
+        return "Created \(todo.createdAt.formatted(date: .abbreviated, time: .omitted))"
+    }
+
+    private var unavailableState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "checkmark.square")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(.white.opacity(0.3))
+
+            Text("Todo unavailable")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.72))
+
+            Button("Back to todos") {
+                controller.closeTodoDetail()
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(Color.agentBlue)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 }
 
 private struct TodoComposerSurfaceShape: Shape {
@@ -2023,6 +2324,7 @@ private struct TodoRow: View {
     let availableListNames: [String]
     let animatesCompletion: Bool
     let showsHistoryMetadata: Bool
+    let onOpen: () -> Void
     let onToggle: () -> Void
     let onToggleStar: () -> Void
     let onSetDueDate: (Date?) -> Void
@@ -2053,53 +2355,67 @@ private struct TodoRow: View {
             .buttonStyle(TodoCheckboxButtonStyle())
             .help(todo.isCompleted ? "Mark incomplete" : "Mark complete")
 
-            HStack(spacing: 12) {
-                Text(todo.title)
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.82 - Double(strikeProgress) * 0.36))
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                    .overlay {
-                        GeometryReader { proxy in
-                            Path { path in
-                                let y = proxy.size.height * 0.54
-                                path.move(to: CGPoint(x: -1, y: y))
-                                path.addLine(to: CGPoint(x: proxy.size.width, y: y))
+            Button(action: onOpen) {
+                HStack(spacing: 7) {
+                    Text(todo.title)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.82 - Double(strikeProgress) * 0.36))
+                        .lineLimit(1)
+                        .overlay {
+                            GeometryReader { proxy in
+                                Path { path in
+                                    let y = proxy.size.height * 0.54
+                                    path.move(to: CGPoint(x: -1, y: y))
+                                    path.addLine(to: CGPoint(x: proxy.size.width, y: y))
+                                }
+                                .trim(from: 0, to: strikeProgress)
+                                .stroke(
+                                    Color.white.opacity(0.58),
+                                    style: StrokeStyle(lineWidth: 1.15, lineCap: .round)
+                                )
                             }
-                            .trim(from: 0, to: strikeProgress)
-                            .stroke(
-                                Color.white.opacity(0.58),
-                                style: StrokeStyle(lineWidth: 1.15, lineCap: .round)
-                            )
                         }
+
+                    if todo.notes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                        Image(systemName: "text.alignleft")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.28))
                     }
 
-                if let listName = todo.listName {
-                    Button {
-                        showingListPicker.toggle()
-                    } label: {
-                        Text(listName)
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.34))
-                            .lineLimit(1)
-                            .frame(maxWidth: 72)
-                    }
-                    .buttonStyle(.plain)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .help("Change list")
-                    .popover(isPresented: $showingListPicker, arrowEdge: .bottom) {
-                        TodoListPickerPopover(
-                            selectedList: todo.listName,
-                            availableLists: availableListNames
-                        ) { listName in
-                            onSetList(listName)
-                        }
+                    Spacer(minLength: 12)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .layoutPriority(1)
+            .help("Open todo details")
+            .accessibilityLabel("Open \(todo.title)")
+            .accessibilityHint("Shows todo details")
+            .accessibilityIdentifier("todo-row-open-\(todo.id.uuidString)")
+
+            if let listName = todo.listName {
+                Button {
+                    showingListPicker.toggle()
+                } label: {
+                    Text(listName)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.34))
+                        .lineLimit(1)
+                        .frame(maxWidth: 72)
+                }
+                .buttonStyle(.plain)
+                .fixedSize(horizontal: true, vertical: false)
+                .help("Change list")
+                .popover(isPresented: $showingListPicker, arrowEdge: .bottom) {
+                    TodoListPickerPopover(
+                        selectedList: todo.listName,
+                        availableLists: availableListNames
+                    ) { listName in
+                        onSetList(listName)
                     }
                 }
             }
-            .layoutPriority(1)
-
-            Spacer(minLength: 12)
 
             if showsHistoryMetadata {
                 starButton
@@ -2616,6 +2932,12 @@ struct NewCodexThreadView: View {
                     .padding(.horizontal, 18)
                     .padding(.vertical, 8)
                     .focused($editorFocused)
+                    .artifactMentionPicker(
+                        text: $controller.editorBody,
+                        mentions: controller.artifactMentions,
+                        writesMarkdown: true,
+                        isActive: editorFocused
+                    )
             }
 
             HStack {

@@ -8,8 +8,8 @@ final class WidgetSupportTests: XCTestCase {
     let noteID = UUID()
     let routes: [IAgentDeepLink] = [
       .todos, .createTodo, .todo(todoID),
-      .notes, .createNote, .note(noteID),
-      .calendar,
+      .notes, .createNote, .note(noteID), .notePath("Notes/roadmap.md"),
+      .calendar, .calendarEvent("event/with spaces:Δ"),
       .meetingReady,
       .codex, .createCodexRequest, .codexThread("thread-safe_01:child")
     ]
@@ -21,8 +21,10 @@ final class WidgetSupportTests: XCTestCase {
     XCTAssertNil(IAgentDeepLink(url: URL(string: "https://todos/create")!))
     XCTAssertNil(IAgentDeepLink(url: URL(string: "iagent://todos/create?title=secret")!))
     XCTAssertNil(IAgentDeepLink(url: URL(string: "iagent://notes/not-a-uuid")!))
+    XCTAssertNil(IAgentDeepLink(url: URL(string: "iagent://notes/path/..%2Fsecrets.md")!))
     XCTAssertNil(IAgentDeepLink(url: URL(string: "iagent://codex/../../escape")!))
     XCTAssertNil(IAgentDeepLink(url: URL(string: "iagent://calendar/create")!))
+    XCTAssertNil(IAgentDeepLink(url: URL(string: "iagent://calendar/event/")!))
     XCTAssertNil(IAgentDeepLink(url: URL(string: "iagent://meetings/start")!))
   }
 

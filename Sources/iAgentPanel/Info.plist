@@ -21,7 +21,18 @@
   <key>CFBundleShortVersionString</key>
   <string>0.2.0</string>
   <key>CFBundleVersion</key>
-  <string>14</string>
+  <string>16</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>com.platon.iagent.panel</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>iagent</string>
+      </array>
+    </dict>
+  </array>
   <key>ITSAppUsesNonExemptEncryption</key>
   <false/>
   <key>LSApplicationCategoryType</key>

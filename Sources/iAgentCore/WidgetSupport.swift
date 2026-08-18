@@ -24,7 +24,9 @@ public enum IAgentDeepLink: Sendable, Equatable {
   case notes
   case createNote
   case note(UUID)
+  case notePath(String)
   case calendar
+  case calendarEvent(String)
   case meetingReady
   case codex
   case createCodexRequest
@@ -59,6 +61,9 @@ public enum IAgentDeepLink: Sendable, Equatable {
         self = .createNote
       } else if components.count == 1, let id = UUID(uuidString: components[0]) {
         self = .note(id)
+      } else if let path = Self.decodeOpaquePathComponent(in: url, after: "/path/"),
+                Self.isSafeRelativeDocumentPath(path) {
+        self = .notePath(path)
       } else {
         return nil
       }
@@ -66,8 +71,13 @@ public enum IAgentDeepLink: Sendable, Equatable {
       guard components == ["record"] else { return nil }
       self = .meetingReady
     case "calendar":
-      guard components.isEmpty else { return nil }
-      self = .calendar
+      if components.isEmpty {
+        self = .calendar
+      } else if let id = Self.decodeOpaquePathComponent(in: url, after: "/event/") {
+        self = .calendarEvent(id)
+      } else {
+        return nil
+      }
     case "codex":
       if components.isEmpty {
         self = .codex
@@ -92,7 +102,11 @@ public enum IAgentDeepLink: Sendable, Equatable {
     case .notes: value = "iagent://notes"
     case .createNote: value = "iagent://notes/create"
     case .note(let id): value = "iagent://notes/\(id.uuidString.lowercased())"
+    case .notePath(let path):
+      value = "iagent://notes/path/\(Self.encodeOpaquePathComponent(path))"
     case .calendar: value = "iagent://calendar"
+    case .calendarEvent(let id):
+      value = "iagent://calendar/event/\(Self.encodeOpaquePathComponent(id))"
     case .meetingReady: value = "iagent://meetings/record"
     case .codex: value = "iagent://codex"
     case .createCodexRequest: value = "iagent://codex/create"
@@ -109,6 +123,38 @@ public enum IAgentDeepLink: Sendable, Equatable {
     guard !value.isEmpty, value.utf8.count <= 128 else { return false }
     let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~:"))
     return value.unicodeScalars.allSatisfy(allowed.contains)
+  }
+
+  static func isSafeRelativeDocumentPath(_ value: String) -> Bool {
+    guard !value.isEmpty,
+          value.utf8.count <= 512,
+          !value.hasPrefix("/"),
+          !value.hasPrefix("~"),
+          !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    else { return false }
+    let components = value.split(separator: "/", omittingEmptySubsequences: false)
+    return !components.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
+  }
+
+  private static func encodeOpaquePathComponent(_ value: String) -> String {
+    let allowed = CharacterSet(
+      charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:"
+    )
+    return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
+  }
+
+  private static func decodeOpaquePathComponent(in url: URL, after prefix: String) -> String? {
+    let encodedPath = url.path(percentEncoded: true)
+    guard encodedPath.hasPrefix(prefix) else { return nil }
+    let encoded = String(encodedPath.dropFirst(prefix.count))
+    guard !encoded.isEmpty,
+          !encoded.contains("/"),
+          let decoded = encoded.removingPercentEncoding,
+          !decoded.isEmpty,
+          decoded.utf8.count <= 512,
+          !decoded.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    else { return nil }
+    return decoded
   }
 }
 

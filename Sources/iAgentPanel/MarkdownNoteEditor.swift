@@ -111,6 +111,8 @@ struct MarkdownNoteEditor: View {
     let documentID: String
     let rawSourceMode: Bool
     let placeholder: String
+    var accessibilityLabel = "Note body"
+    var accessibilityIdentifier = "note-markdown-editor"
 
     var body: some View {
         NativeTextViewWrapper(
@@ -130,8 +132,8 @@ struct MarkdownNoteEditor: View {
                 ]
             )
         )
-        .accessibilityLabel("Note body")
-        .accessibilityIdentifier("note-markdown-editor")
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 
     private var configuration: MarkdownEditorConfiguration {
@@ -226,7 +228,8 @@ struct MarkdownFormattingToolbar: View {
     let rawSourceMode: Bool
     let showFind: () -> Void
     let toggleSourceMode: () -> Void
-    let openLibrary: () -> Void
+    var openLibrary: (() -> Void)? = nil
+    var accessibilityPrefix = "note"
     @State private var showingLinkEditor = false
     @State private var linkURL = ""
     @State private var showingImageEditor = false
@@ -236,16 +239,16 @@ struct MarkdownFormattingToolbar: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            formattingButton("bold", help: "Bold (Command-B)", id: "note-format-bold") {
+            formattingButton("bold", help: "Bold (Command-B)", id: "\(accessibilityPrefix)-format-bold") {
                 NoteEditorFormatting.applyBold()
             }
-            formattingButton("italic", help: "Italic (Command-I)", id: "note-format-italic") {
+            formattingButton("italic", help: "Italic (Command-I)", id: "\(accessibilityPrefix)-format-italic") {
                 NoteEditorFormatting.applyItalic()
             }
-            formattingButton("underline", help: "Underline (Command-U)", id: "note-format-underline") {
+            formattingButton("underline", help: "Underline (Command-U)", id: "\(accessibilityPrefix)-format-underline") {
                 NoteEditorFormatting.applyUnderline()
             }
-            formattingButton("strikethrough", help: "Strikethrough (Command-Shift-X)", id: "note-format-strike") {
+            formattingButton("strikethrough", help: "Strikethrough (Command-Shift-X)", id: "\(accessibilityPrefix)-format-strike") {
                 NoteEditorFormatting.applyStrikethrough()
             }
 
@@ -254,7 +257,7 @@ struct MarkdownFormattingToolbar: View {
             MarkdownToolbarButton(
                 symbol: "link",
                 help: "Link (Command-K)",
-                accessibilityID: "note-format-link"
+                accessibilityID: "\(accessibilityPrefix)-format-link"
             ) {
                 showingLinkEditor = true
             }
@@ -262,29 +265,29 @@ struct MarkdownFormattingToolbar: View {
                 linkEditor
             }
 
-            formattingButton("list.number", help: "Numbered list (Command-Shift-7)", id: "note-format-numbered") {
+            formattingButton("list.number", help: "Numbered list (Command-Shift-7)", id: "\(accessibilityPrefix)-format-numbered") {
                 NoteEditorFormatting.applyOrderedList()
             }
-            formattingButton("list.bullet", help: "Bulleted list (Command-Shift-8)", id: "note-format-bulleted") {
+            formattingButton("list.bullet", help: "Bulleted list (Command-Shift-8)", id: "\(accessibilityPrefix)-format-bulleted") {
                 NoteEditorFormatting.applyUnorderedList()
             }
 
             toolbarDivider
 
-            formattingButton("text.quote", help: "Block quote", id: "note-format-quote") {
+            formattingButton("text.quote", help: "Block quote", id: "\(accessibilityPrefix)-format-quote") {
                 NoteEditorFormatting.applyBlockquote()
             }
             formattingButton(
                 "chevron.left.forwardslash.chevron.right",
                 help: "Inline code",
-                id: "note-format-inline-code"
+                id: "\(accessibilityPrefix)-format-inline-code"
             ) {
                 NoteEditorFormatting.applyInlineCode()
             }
-            formattingButton("curlybraces.square", help: "Code block", id: "note-format-code-block") {
+            formattingButton("curlybraces.square", help: "Code block", id: "\(accessibilityPrefix)-format-code-block") {
                 NoteEditorFormatting.applyCodeBlock()
             }
-            formattingButton("checklist", help: "Checklist", id: "note-format-checklist") {
+            formattingButton("checklist", help: "Checklist", id: "\(accessibilityPrefix)-format-checklist") {
                 NoteEditorFormatting.applyTaskList()
             }
 
@@ -294,17 +297,20 @@ struct MarkdownFormattingToolbar: View {
                 showImageEditor: {
                     showingImageEditor = true
                 },
-                toggleSourceMode: toggleSourceMode
+                toggleSourceMode: toggleSourceMode,
+                accessibilityPrefix: accessibilityPrefix
             )
 
             Spacer(minLength: 12)
 
-            MarkdownToolbarButton(
-                symbol: "folder",
-                help: "Open iAgent Library",
-                accessibilityID: "note-open-library",
-                action: openLibrary
-            )
+            if let openLibrary {
+                MarkdownToolbarButton(
+                    symbol: "folder",
+                    help: "Open iAgent Library",
+                    accessibilityID: "\(accessibilityPrefix)-open-library",
+                    action: openLibrary
+                )
+            }
         }
         .onReceive(NoteEditorFormatting.linkEditorRequests) { _ in
             showingLinkEditor = true
@@ -455,6 +461,7 @@ struct MarkdownFormattingMenu: View {
     let showFind: () -> Void
     let showImageEditor: () -> Void
     let toggleSourceMode: () -> Void
+    var accessibilityPrefix = "note"
     @State private var hovered = false
     @FocusState private var focused: Bool
 
@@ -501,9 +508,9 @@ struct MarkdownFormattingMenu: View {
         .buttonStyle(MarkdownToolbarPressStyle())
         .focused($focused)
         .onHover { hovered = $0 }
-        .help("More note tools")
-        .accessibilityLabel("More note tools")
-        .accessibilityIdentifier("note-format-more")
+        .help("More formatting tools")
+        .accessibilityLabel("More formatting tools")
+        .accessibilityIdentifier("\(accessibilityPrefix)-format-more")
     }
 }
 
