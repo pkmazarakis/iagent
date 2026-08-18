@@ -89,7 +89,10 @@ for metadata_key in CFBundleIdentifier CFBundleShortVersionString CFBundleVersio
     || fail "$metadata_key in the executable does not match the release source"
 done
 for compiled_marker in HomeMessageMoreIcon NotesListView MessageInboxView PanelPageHeader PanelTooltipPresenter; do
-  /usr/bin/strings "$ARCHIVED_EXECUTABLE" | /usr/bin/grep -Fx "$compiled_marker" >/dev/null \
+  # Swift metadata strings can carry a printable length-prefix byte (for example,
+  # `?MessageInboxView`), so require a symbol boundary instead of byte-for-byte text.
+  /usr/bin/strings "$ARCHIVED_EXECUTABLE" \
+    | /usr/bin/grep -E "(^|[^[:alnum:]_])${compiled_marker}$" >/dev/null \
     || fail "compiled desktop marker is missing: $compiled_marker"
 done
 /usr/bin/strings "$ARCHIVED_EXECUTABLE" \
