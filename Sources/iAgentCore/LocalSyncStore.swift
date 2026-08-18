@@ -389,9 +389,40 @@ public actor IAgentLocalSyncStore {
       return $0.sentAt < $1.sentAt
     }
     let retainedConversationIDs = Set(messages.map(\.conversationID))
-    let messageConversations = payloads.compactMap(\.messageConversationValue).filter {
+    let persistedMessageConversations = payloads.compactMap(\.messageConversationValue).filter {
       retainedConversationIDs.contains($0.id)
-    }.sorted {
+    }
+    let persistedConversationIDs = Set(persistedMessageConversations.map(\.id))
+    // Older relay snapshots could retain messages while omitting their
+    // conversation summaries. Keep those messages visible locally instead of
+    // presenting a misleading empty inbox. The next authoritative Mac scan
+    // replaces these display-only fallbacks with source-authored summaries.
+    let recoveredMessageConversations = Dictionary(grouping: messages) { $0.conversationID }
+      .compactMap { conversationID, conversationMessages -> SyncedMessageConversation? in
+        guard !persistedConversationIDs.contains(conversationID),
+              let latest = conversationMessages.last
+        else { return nil }
+        let participantName = latest.senderDisplayName?.trimmingCharacters(
+          in: .whitespacesAndNewlines
+        )
+        let displayName = participantName.flatMap { $0.isEmpty ? nil : $0 }
+          ?? latest.senderID
+          ?? "Message"
+        let participants = latest.senderID.map {
+          [SyncedMessageParticipant(id: $0, displayName: displayName)]
+        } ?? []
+        return SyncedMessageConversation(
+          id: conversationID,
+          displayName: displayName,
+          participants: participants,
+          isGroup: false,
+          latestMessageID: latest.id,
+          latestMessageDate: latest.sentAt,
+          latestPreview: latest.body,
+          updatedAt: latest.updatedAt
+        )
+      }
+    let messageConversations = (persistedMessageConversations + recoveredMessageConversations).sorted {
       if $0.latestMessageDate == $1.latestMessageDate { return $0.id < $1.id }
       return $0.latestMessageDate > $1.latestMessageDate
     }
@@ -1651,7 +1682,12 @@ public actor IAgentLocalSyncStore {
       let remoteChangedBody = remoteNote.body != baseNote.body
       if localChangedBody, remoteChangedBody, localNote.body != remoteNote.body {
         let preferLocal = shouldPrefer(local, over: remote)
-        let primary = preferLocal ? localNote : remoteNote
+        let primary = mergeNote(
+          local: localNote,
+          remote: remoteNote,
+          base: baseNote,
+          preferLocal: preferLocal
+        )
         let losingVersion = preferLocal ? remoteNote : localNote
         let stamp = ISO8601DateFormatter().string(from: losingVersion.updatedAt)
         let conflict = SyncedNote(
@@ -1665,7 +1701,15 @@ public actor IAgentLocalSyncStore {
         )
         return (.note(primary), .note(conflict))
       }
-      return (shouldPrefer(local, over: remote) ? local : remote, nil)
+      return (
+        .note(mergeNote(
+          local: localNote,
+          remote: remoteNote,
+          base: baseNote,
+          preferLocal: shouldPrefer(local, over: remote)
+        )),
+        nil
+      )
 
     default:
       return (shouldPrefer(local, over: remote) ? local : remote, nil)
@@ -1737,6 +1781,31 @@ public actor IAgentLocalSyncStore {
       updatedAt: max(local.updatedAt, remote.updatedAt),
       deletedAt: mergeField(base: base.deletedAt, local: local.deletedAt, remote: remote.deletedAt, preferLocal: preferLocal)
     )
+  }
+
+  private func mergeNote(
+    local: SyncedNote,
+    remote: SyncedNote,
+    base: SyncedNote,
+    preferLocal: Bool
+  ) -> SyncedNote {
+    // Keep the preferred record's identity and metadata, but merge the two editor fields
+    // independently. A body-only save must not roll back a concurrent title edit (or vice versa).
+    // Divergent dual-body edits are handled above and still produce a conflict copy.
+    var merged = preferLocal ? local : remote
+    merged.title = mergeField(
+      base: base.title,
+      local: local.title,
+      remote: remote.title,
+      preferLocal: preferLocal
+    )
+    merged.body = mergeField(
+      base: base.body,
+      local: local.body,
+      remote: remote.body,
+      preferLocal: preferLocal
+    )
+    return merged
   }
 
   private func shouldPrefer(

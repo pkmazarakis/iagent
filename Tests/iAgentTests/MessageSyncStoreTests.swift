@@ -104,6 +104,30 @@ final class MessageSyncStoreTests: XCTestCase {
     XCTAssertEqual(snapshot.messageRelayStates.map(\.id), [relayState.id])
   }
 
+  func testSnapshotRecoversConversationWhenMessagesExistWithoutSummary() async throws {
+    let fixture = makeStoreFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+    let now = freshDate()
+    let message = makeMessage(body: "Visible after zero-summary recovery", now: now)
+    try await fixture.store.upsertLocal(.message(message))
+
+    let snapshot = await fixture.store.snapshot(referenceDate: now)
+    let recovered = try XCTUnwrap(snapshot.messageConversations.first)
+    XCTAssertEqual(snapshot.messages, [message])
+    XCTAssertEqual(snapshot.messageConversations.count, 1)
+    XCTAssertEqual(recovered.id, message.conversationID)
+    XCTAssertEqual(recovered.displayName, "Maya")
+    XCTAssertEqual(recovered.latestMessageID, message.id)
+    XCTAssertEqual(recovered.latestMessageDate, message.sentAt)
+    XCTAssertEqual(recovered.latestPreview, message.body)
+    XCTAssertEqual(recovered.participants.map(\.id), ["participant-1"])
+
+    let reloadedStore = IAgentLocalSyncStore(fileURL: fixture.fileURL)
+    let reloaded = await reloadedStore.snapshot(referenceDate: now)
+    XCTAssertEqual(reloaded.messageConversations, snapshot.messageConversations)
+  }
+
   func testDeleteLocalPhysicallyRemovesRemoteBaseAndSystemFields() async throws {
     let fixture = makeStoreFixture()
     defer { try? FileManager.default.removeItem(at: fixture.rootURL) }

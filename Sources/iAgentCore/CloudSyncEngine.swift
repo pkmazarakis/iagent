@@ -255,12 +255,16 @@ public final class IAgentCloudSyncEngine: CKSyncEngineDelegate, @unchecked Senda
     do {
       guard let accountFingerprint = try await prepareCurrentCloudAccount() else { return }
 
-      try await store.enforceMessageRetention()
+      try await store.enforceMessageRetention(
+        cloudAccountFingerprint: accountFingerprint
+      )
       await enqueueZoneIfNeeded()
       await enqueuePendingLocalChanges()
       if fetchesRemoteChanges {
         try await engine.fetchChanges()
-        try await store.enforceMessageRetention()
+        try await store.enforceMessageRetention(
+          cloudAccountFingerprint: accountFingerprint
+        )
         await enqueuePendingLocalChanges()
       }
       try await engine.sendChanges()
@@ -364,28 +368,23 @@ public final class IAgentCloudSyncEngine: CKSyncEngineDelegate, @unchecked Senda
 
   private func enqueuePendingLocalChanges() async {
     guard let accountFingerprint = await accountSessionState.read() else { return }
-    let saveNames: Set<String>
-    let deletionNames: Set<String>
+    let pending: IAgentPendingCloudChanges
     do {
-      saveNames = Set(
-        try await store.pendingRecordNames(forCloudAccount: accountFingerprint)
-      )
-      deletionNames = Set(
-        try await store.pendingDeletionRecordNames(forCloudAccount: accountFingerprint)
-      )
+      pending = try await store.pendingCloudChanges(forCloudAccount: accountFingerprint)
     } catch {
       await setStatus(.accountUnavailable, message: error.localizedDescription)
       return
     }
 
-    let effectiveSaveNames = saveNames.subtracting(deletionNames)
+    let saveNames = Set(pending.saveRecordNames)
+    let deletionNames = Set(pending.deletionRecordNames)
     let current = engine.state.pendingRecordZoneChanges
     let obsolete = current.filter { change in
       switch change {
       case let .saveRecord(recordID):
-        !effectiveSaveNames.contains(recordID.recordName)
+        recordID.zoneID == zoneID && !saveNames.contains(recordID.recordName)
       case let .deleteRecord(recordID):
-        !deletionNames.contains(recordID.recordName)
+        recordID.zoneID == zoneID && !deletionNames.contains(recordID.recordName)
       @unknown default:
         false
       }
@@ -395,15 +394,13 @@ public final class IAgentCloudSyncEngine: CKSyncEngineDelegate, @unchecked Senda
     }
 
     let existing = Set(engine.state.pendingRecordZoneChanges.compactMap(Self.recordID))
-    let saveChanges = effectiveSaveNames.compactMap {
-      name -> CKSyncEngine.PendingRecordZoneChange? in
+    let saveChanges = saveNames.compactMap { name -> CKSyncEngine.PendingRecordZoneChange? in
       let recordID = CKRecord.ID(recordName: name, zoneID: zoneID)
       guard !existing.contains(recordID) else { return nil }
       return .saveRecord(recordID)
     }
     let existingWithSaves = existing.union(saveChanges.compactMap(Self.recordID))
-    let deleteChanges = deletionNames.compactMap {
-      name -> CKSyncEngine.PendingRecordZoneChange? in
+    let deleteChanges = deletionNames.compactMap { name -> CKSyncEngine.PendingRecordZoneChange? in
       let recordID = CKRecord.ID(recordName: name, zoneID: zoneID)
       guard !existingWithSaves.contains(recordID) else { return nil }
       return .deleteRecord(recordID)
@@ -487,25 +484,14 @@ public final class IAgentCloudSyncEngine: CKSyncEngineDelegate, @unchecked Senda
     let deletedRecordNames = changes.deletions.compactMap { deletion in
       deletion.recordID.zoneID == zoneID ? deletion.recordID.recordName : nil
     }
-    do {
-      let newPending = try await store.applyRemoteChanges(
-        fetchedRecords,
-        deletedRecordNames: deletedRecordNames,
-        cloudAccountFingerprint: accountFingerprint
-      )
-      let pendingChanges = newPending.map {
-        CKSyncEngine.PendingRecordZoneChange.saveRecord(
-          CKRecord.ID(recordName: $0, zoneID: zoneID)
-        )
-      }
-      if !pendingChanges.isEmpty {
-        syncEngine.state.add(pendingRecordZoneChanges: pendingChanges)
-      }
-    } catch {
-      issueCount += 1
-    }
-
-    _ = try await store.enforceMessageRetention()
+    _ = try await store.applyRemoteChanges(
+      fetchedRecords,
+      deletedRecordNames: deletedRecordNames,
+      cloudAccountFingerprint: accountFingerprint
+    )
+    try await store.enforceMessageRetention(
+      cloudAccountFingerprint: accountFingerprint
+    )
     await enqueuePendingLocalChanges()
 
     if issueCount > 0 {
@@ -522,69 +508,60 @@ public final class IAgentCloudSyncEngine: CKSyncEngineDelegate, @unchecked Senda
   ) async throws {
     guard let accountFingerprint = await accountSessionState.read() else { return }
     var issueCount = 0
-    var firstCloudFailure: CKError?
-    var sentRecords: [IAgentSentRecord] = []
+    var savedRecordsByName: [String: CKRecord] = [:]
+    var sentCandidates: [IAgentSyncPayloadDecodeCandidate] = []
     for record in changes.savedRecords where record.recordType == recordType {
+      let recordName = record.recordID.recordName
+      savedRecordsByName[recordName] = record
       guard let payloadData = record.encryptedValues.object(forKey: "payload") as? Data else {
         issueCount += 1
         continue
       }
-      let decoded = IAgentSyncPayloadBatchDecoder.decode([
-        IAgentSyncPayloadDecodeCandidate(
-          recordName: record.recordID.recordName,
-          data: payloadData
-        )
-      ])
-      guard let sentPayload = decoded.decoded.first?.payload else {
-        issueCount += max(1, decoded.failures.count)
-        continue
-      }
-      sentRecords.append(IAgentSentRecord(
-        recordName: record.recordID.recordName,
-        sentPayload: sentPayload,
-        cloudSystemFields: Self.systemFields(for: record)
+      sentCandidates.append(IAgentSyncPayloadDecodeCandidate(
+        recordName: recordName,
+        data: payloadData
       ))
     }
-    do {
+    let sentBatch = IAgentSyncPayloadBatchDecoder.decode(sentCandidates)
+    issueCount += sentBatch.failures.count
+    let sentRecords = sentBatch.decoded.compactMap { decoded -> IAgentSentRecord? in
+      guard let record = savedRecordsByName[decoded.recordName] else { return nil }
+      return IAgentSentRecord(
+        recordName: decoded.recordName,
+        sentPayload: decoded.payload,
+        cloudSystemFields: Self.systemFields(for: record)
+      )
+    }
+    if !sentRecords.isEmpty {
       try await store.markSent(
         sentRecords,
         cloudAccountFingerprint: accountFingerprint
       )
-    } catch {
-      issueCount += 1
     }
 
+    var firstCloudFailure: CKError?
     for recordID in changes.deletedRecordIDs where recordID.zoneID == zoneID {
-      do {
+      try await store.acknowledgeDeletion(
+        recordName: recordID.recordName,
+        cloudAccountFingerprint: accountFingerprint
+      )
+    }
+
+    for (recordID, error) in changes.failedRecordDeletes where recordID.zoneID == zoneID {
+      if error.code == .unknownItem {
         try await store.acknowledgeDeletion(
           recordName: recordID.recordName,
           cloudAccountFingerprint: accountFingerprint
         )
-      } catch {
-        issueCount += 1
-      }
-    }
-
-    for (recordID, error) in changes.failedRecordDeletes where recordID.zoneID == zoneID {
-      do {
-        if error.code == .unknownItem {
-          try await store.acknowledgeDeletion(
-            recordName: recordID.recordName,
-            cloudAccountFingerprint: accountFingerprint
-          )
-          syncEngine.state.remove(pendingRecordZoneChanges: [.deleteRecord(recordID)])
-        } else {
-          try await store.requeueDeletion(
-            recordName: recordID.recordName,
-            cloudAccountFingerprint: accountFingerprint
-          )
-          syncEngine.state.add(pendingRecordZoneChanges: [.deleteRecord(recordID)])
-          if firstCloudFailure == nil {
-            firstCloudFailure = error
-          }
+        syncEngine.state.remove(pendingRecordZoneChanges: [.deleteRecord(recordID)])
+      } else {
+        if firstCloudFailure == nil {
+          firstCloudFailure = error
         }
-      } catch {
-        issueCount += 1
+        try await store.requeueDeletion(
+          recordName: recordID.recordName,
+          cloudAccountFingerprint: accountFingerprint
+        )
       }
     }
 
@@ -605,15 +582,11 @@ public final class IAgentCloudSyncEngine: CKSyncEngineDelegate, @unchecked Senda
         ])
         if let payload = decoded.decoded.first?.payload {
           do {
-            let newPending = try await store.mergeRemote(
+            _ = try await store.mergeRemote(
               payload,
               cloudSystemFields: Self.systemFields(for: serverRecord),
               cloudAccountFingerprint: accountFingerprint
             )
-            let mergedNames = newPending.isEmpty ? [serverRecord.recordID.recordName] : newPending
-            syncEngine.state.add(pendingRecordZoneChanges: mergedNames.map {
-              .saveRecord(CKRecord.ID(recordName: $0, zoneID: zoneID))
-            })
             mergedServerRecord = true
           } catch {
             issueCount += 1
@@ -624,11 +597,15 @@ public final class IAgentCloudSyncEngine: CKSyncEngineDelegate, @unchecked Senda
       }
 
       if !mergedServerRecord {
-        syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(failure.record.recordID)])
+        // The store remains authoritative about whether this ID is still a save,
+        // a delete, or was superseded while the request was in flight. The final
+        // reconciliation below recreates only the still-desired change.
       }
     }
 
-    _ = try await store.enforceMessageRetention()
+    try await store.enforceMessageRetention(
+      cloudAccountFingerprint: accountFingerprint
+    )
     await enqueuePendingLocalChanges()
 
     if issueCount > 0 {

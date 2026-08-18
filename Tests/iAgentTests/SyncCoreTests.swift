@@ -105,6 +105,76 @@ final class SyncCoreTests: XCTestCase {
     XCTAssertEqual(recordsA, recordsB)
     XCTAssertEqual(recordsA.count, 2)
     XCTAssertEqual(Set(recordsA.map(\.recordName)).count, 2)
+    let notes = recordsA.compactMap { payload -> SyncedNote? in
+      guard case let .note(note) = payload else { return nil }
+      return note
+    }
+    XCTAssertEqual(notes.count, 2)
+    XCTAssertEqual(Set(notes.map(\.body)), ["Desktop revision", "Mobile revision"])
+    XCTAssertEqual(notes.filter { $0.id == noteID }.map(\.title), ["Roadmap"])
+    XCTAssertEqual(
+      notes.filter { $0.id != noteID }.map(\.title).filter { $0.hasPrefix("Roadmap (Conflict ") }.count,
+      1
+    )
+  }
+
+  func testConcurrentNoteTitleAndBodyEditsMergeIndependentlyAndConverge() async throws {
+    let root = temporaryDirectory(named: "note-field-convergence")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let storeA = IAgentLocalSyncStore(fileURL: root.appendingPathComponent("a.json"))
+    let storeB = IAgentLocalSyncStore(fileURL: root.appendingPathComponent("b.json"))
+    let noteID = try XCTUnwrap(UUID(uuidString: "A8697897-81F2-4518-B9E8-5753D3BE3BF7"))
+    let createdAt = Date(timeIntervalSince1970: 1_700_150_000)
+    let base = SyncedNote(
+      id: noteID,
+      title: "Launch plan",
+      body: "Initial outline",
+      createdAt: createdAt,
+      updatedAt: createdAt,
+      sourceDeviceID: "desktop"
+    )
+    try await storeA.mergeRemote(.note(base), cloudSystemFields: nil)
+    try await storeB.mergeRemote(.note(base), cloudSystemFields: nil)
+
+    var titleEdit = base
+    titleEdit.title = "Production launch plan"
+    titleEdit.updatedAt = createdAt.addingTimeInterval(60)
+    titleEdit.sourceDeviceID = "desktop"
+    var bodyEdit = base
+    bodyEdit.body = "@Ada owns the release checklist."
+    bodyEdit.updatedAt = createdAt.addingTimeInterval(120)
+    bodyEdit.sourceDeviceID = "mobile"
+    try await storeA.upsertLocal(.note(titleEdit))
+    try await storeB.upsertLocal(.note(bodyEdit))
+
+    let outboundAValue = await storeA.payload(for: IAgentSyncPayload.note(base).recordName)
+    let outboundBValue = await storeB.payload(for: IAgentSyncPayload.note(base).recordName)
+    let outboundA = try XCTUnwrap(outboundAValue)
+    let outboundB = try XCTUnwrap(outboundBValue)
+    try await storeA.mergeRemote(outboundB, cloudSystemFields: nil)
+    try await storeB.mergeRemote(outboundA, cloudSystemFields: nil)
+
+    let mergedAValue = await storeA.payload(for: outboundA.recordName)
+    let mergedBValue = await storeB.payload(for: outboundB.recordName)
+    let mergedA = try XCTUnwrap(mergedAValue)
+    let mergedB = try XCTUnwrap(mergedBValue)
+    XCTAssertEqual(mergedA, mergedB)
+    guard case let .note(note) = mergedA else {
+      return XCTFail("Expected a note payload")
+    }
+    XCTAssertEqual(note.title, "Production launch plan")
+    XCTAssertEqual(note.body, "@Ada owns the release checklist.")
+    let allPayloadsA = await storeA.allPayloads()
+    let allPayloadsB = await storeB.allPayloads()
+    XCTAssertEqual(allPayloadsA.count, 1)
+    XCTAssertEqual(allPayloadsB.count, 1)
+
+    try await storeA.mergeRemote(mergedB, cloudSystemFields: nil)
+    try await storeB.mergeRemote(mergedA, cloudSystemFields: nil)
+    let pendingA = await storeA.pendingRecordNames()
+    let pendingB = await storeB.pendingRecordNames()
+    XCTAssertEqual(pendingA, [])
+    XCTAssertEqual(pendingB, [])
   }
 
   func testCorruptLocalRecordDoesNotDiscardValidRecords() async throws {
