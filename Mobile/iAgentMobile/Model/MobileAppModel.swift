@@ -1843,17 +1843,20 @@ private enum MobileFixtureData {
     let maya = SyncedMessageParticipant(
       id: "fixture-contact-maya",
       displayName: "Maya Chen",
-      isContactNameResolved: true
+      isContactNameResolved: true,
+      replyAddress: "+15555550201"
     )
     let alex = SyncedMessageParticipant(
       id: "fixture-contact-alex",
       displayName: "Alex Rivera",
-      isContactNameResolved: true
+      isContactNameResolved: true,
+      replyAddress: "+15555550202"
     )
     let jordan = SyncedMessageParticipant(
       id: "fixture-contact-jordan",
       displayName: "Jordan Lee",
-      isContactNameResolved: true
+      isContactNameResolved: true,
+      replyAddress: "+15555550203"
     )
     let mayaMessages = [
       SyncedMessage(

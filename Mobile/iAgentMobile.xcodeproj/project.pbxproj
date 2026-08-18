@@ -41,6 +41,7 @@
 		B30000000000000000000002 /* MobileSettingsPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B30000000000000000000005 /* MobileSettingsPresentationTests.swift */; };
 		AC7100000000000000000001 /* iAgentActions in Frameworks */ = {isa = PBXBuildFile; productRef = AC7100000000000000000002 /* iAgentActions */; };
 		D51000000000000000000001 /* MessagesMobileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D52000000000000000000001 /* MessagesMobileView.swift */; };
+		D51000000000000000000002 /* MobileMessageReplyTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D52000000000000000000002 /* MobileMessageReplyTransport.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -113,6 +114,7 @@
 		B30000000000000000000005 /* MobileSettingsPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileSettingsPresentationTests.swift; sourceTree = "<group>"; };
 		B30000000000000000000006 /* iAgentMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iAgentMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D52000000000000000000001 /* MessagesMobileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesMobileView.swift; sourceTree = "<group>"; };
+		D52000000000000000000002 /* MobileMessageReplyTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileMessageReplyTransport.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -185,6 +187,7 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000005 /* MobileAppModel.swift */,
+				D52000000000000000000002 /* MobileMessageReplyTransport.swift */,
 				A20000000000000000000003 /* MobileCalendarService.swift */,
 				A20000000000000000000004 /* MobileMeetingRecorder.swift */,
 				D20000000000000000000001 /* LiveSpeechAnalyzerAdapter.swift */,
@@ -423,6 +426,7 @@
 				A10000000000000000000004 /* MobileMeetingRecorder.swift in Sources */,
 				D10000000000000000000001 /* LiveSpeechAnalyzerAdapter.swift in Sources */,
 				A10000000000000000000005 /* MobileAppModel.swift in Sources */,
+				D51000000000000000000002 /* MobileMessageReplyTransport.swift in Sources */,
 				A10000000000000000000006 /* MobileRootView.swift in Sources */,
 				A10000000000000000000007 /* TodayView.swift in Sources */,
 				A10000000000000000000008 /* CodexMobileView.swift in Sources */,

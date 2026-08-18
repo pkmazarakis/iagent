@@ -184,6 +184,128 @@ final class DesktopSyncCoordinatorTests: XCTestCase {
     XCTAssertTrue(secondPending.isEmpty)
   }
 
+  func testReplyAddressProjectionAndRevocationRestageCachedConversation() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("iagent-message-reply-scrub-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let coordinator = DesktopSyncCoordinator(
+      documentStore: LocalDocumentStore(rootURL: root),
+      smokeTest: true
+    )
+    let sentAt = Date().addingTimeInterval(-60)
+    let message = SyncedMessage(
+      id: "message-reply-scrub",
+      conversationID: "conversation-reply-scrub",
+      senderID: "opaque-participant",
+      senderDisplayName: "Avery",
+      isFromMe: false,
+      body: "Hello",
+      sentAt: sentAt,
+      updatedAt: sentAt
+    )
+    let conversation = SyncedMessageConversation(
+      id: message.conversationID,
+      displayName: "Avery",
+      participants: [
+        SyncedMessageParticipant(
+          id: "opaque-participant",
+          displayName: "Avery",
+          isContactNameResolved: true
+        )
+      ],
+      isGroup: false,
+      serviceName: "iMessage",
+      latestMessageID: message.id,
+      latestMessageDate: sentAt,
+      latestPreview: message.body,
+      updatedAt: sentAt
+    )
+
+    let projected = await coordinator.ingestMessageBatch(
+      MessageProviderBatch(
+        conversations: [conversation],
+        messages: [message],
+        isFullSnapshot: false
+      )
+    )
+    let projectedConversation = try XCTUnwrap(projected.messageConversations.first)
+    try await coordinator.mergeRemoteForTesting([
+      .messageConversation(projectedConversation),
+      .message(message),
+    ])
+    let pendingAfterAcknowledgement = await coordinator.pendingRecordNamesForTesting()
+    XCTAssertTrue(pendingAfterAcknowledgement.isEmpty)
+
+    var replyEnabledConversation = projectedConversation
+    replyEnabledConversation.participants[0].replyAddress = "+15551234567"
+    let replyEnabled = await coordinator.ingestMessageBatch(
+      MessageProviderBatch(
+        conversations: [replyEnabledConversation],
+        messages: [message],
+        isFullSnapshot: false
+      )
+    )
+    let replyEnabledProjection = try XCTUnwrap(replyEnabled.messageConversations.first)
+    XCTAssertEqual(
+      replyEnabledProjection.participants.first?.replyAddress,
+      "+15551234567"
+    )
+    XCTAssertEqual(replyEnabledProjection.updatedAt, projectedConversation.updatedAt)
+    let pendingAfterReplyProjection = await coordinator.pendingRecordNamesForTesting()
+    XCTAssertEqual(
+      pendingAfterReplyProjection,
+      [IAgentSyncPayload.messageConversation(replyEnabledProjection).recordName]
+    )
+    try await coordinator.mergeRemoteForTesting([
+      .messageConversation(replyEnabledProjection),
+      .message(message),
+    ])
+    let storeURL = root.appendingPathComponent(".sync/sync-store.json")
+    let persistedBeforeScrub = try Data(contentsOf: storeURL)
+    XCTAssertTrue(
+      String(data: persistedBeforeScrub, encoding: .utf8)?.contains("+15551234567") == true
+    )
+
+    let scrubbed = await coordinator.scrubMessageReplyAddresses()
+    let scrubbedConversation = try XCTUnwrap(scrubbed.messageConversations.first)
+    XCTAssertNil(scrubbedConversation.participants.first?.replyAddress)
+    XCTAssertEqual(scrubbedConversation.participants.first?.id, "opaque-participant")
+    XCTAssertEqual(scrubbedConversation.updatedAt, replyEnabledProjection.updatedAt)
+    let pendingAfterScrub = await coordinator.pendingRecordNamesForTesting()
+    XCTAssertEqual(
+      pendingAfterScrub,
+      [IAgentSyncPayload.messageConversation(scrubbedConversation).recordName]
+    )
+
+    let persistedAfterScrub = try Data(contentsOf: storeURL)
+    XCTAssertFalse(
+      String(data: persistedAfterScrub, encoding: .utf8)?.contains("+15551234567") == true
+    )
+
+    let restartedStore = IAgentLocalSyncStore(
+      fileURL: storeURL,
+      messageProjectionRole: .localAuthority
+    )
+    let pendingAfterRestart = await restartedStore.pendingRecordNames()
+    XCTAssertEqual(
+      pendingAfterRestart,
+      [IAgentSyncPayload.messageConversation(scrubbedConversation).recordName]
+    )
+    let restartedPayload = await restartedStore.payload(
+      for: IAgentSyncPayload.messageConversation(scrubbedConversation).recordName
+    )
+    guard let restartedPayload else {
+      XCTFail("Expected the scrubbed conversation after restart")
+      return
+    }
+    guard case let .messageConversation(restartedConversation) = restartedPayload else {
+      XCTFail("Expected a message conversation after restart")
+      return
+    }
+    XCTAssertNil(restartedConversation.participants.first?.replyAddress)
+  }
+
   func testMessageIngestEnforcesRollingRetentionAndQueuesPhysicalDeletion() async throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("iagent-message-retention-\(UUID().uuidString)", isDirectory: true)

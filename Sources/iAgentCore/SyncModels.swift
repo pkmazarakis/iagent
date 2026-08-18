@@ -471,15 +471,18 @@ public struct SyncedMessageParticipant: Codable, Identifiable, Sendable, Equatab
   public let id: String
   public var displayName: String
   public var isContactNameResolved: Bool?
+  public var replyAddress: String?
 
   public init(
     id: String,
     displayName: String,
-    isContactNameResolved: Bool? = nil
+    isContactNameResolved: Bool? = nil,
+    replyAddress: String? = nil
   ) {
     self.id = id
     self.displayName = displayName
     self.isContactNameResolved = isContactNameResolved
+    self.replyAddress = replyAddress
   }
 }
 

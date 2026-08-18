@@ -591,6 +591,54 @@ public actor IAgentLocalSyncStore {
     }
   }
 
+  /// Removes opt-in Messages routing addresses from both the current projection
+  /// and its acknowledged merge ancestry. A scrubbed current record remains
+  /// pending until CloudKit acknowledges the address-free payload.
+  @discardableResult
+  public func scrubMessageReplyAddresses() throws -> Bool {
+    let previousState = state
+    do {
+      let recordNames = Set(state.records.keys).union(state.baseRecords.keys)
+      var changed = false
+
+      for recordName in recordNames {
+        let current = state.records[recordName]
+        let base = state.baseRecords[recordName]
+        let scrubbedCurrent = current.flatMap(Self.scrubbingMessageReplyAddresses)
+        let scrubbedBase = base.flatMap(Self.scrubbingMessageReplyAddresses)
+        guard scrubbedCurrent != nil || scrubbedBase != nil else { continue }
+
+        changed = true
+        if let scrubbedCurrent {
+          state.records[recordName] = scrubbedCurrent
+        } else if current == nil,
+                  let scrubbedBase,
+                  !state.pendingDeletionRecordNames.contains(recordName) {
+          // Repair the unlikely base-only state without leaving the server-side
+          // routing address untouched.
+          state.records[recordName] = scrubbedBase
+        }
+
+        // Removing the base is intentional. Persisting an identical scrubbed
+        // base would let restart repair mistake the pending privacy update for
+        // a redundant save before CloudKit has actually acknowledged it.
+        state.baseRecords.removeValue(forKey: recordName)
+        if state.pendingDeletionRecordNames.contains(recordName) {
+          state.pendingRecordNames.remove(recordName)
+        } else if state.records[recordName] != nil {
+          state.pendingRecordNames.insert(recordName)
+        }
+      }
+
+      guard changed else { return false }
+      try persistAndNotify()
+      return true
+    } catch {
+      state = previousState
+      throw error
+    }
+  }
+
   /// Atomically revalidates an action's named to-do list and deterministic idempotency slot, then
   /// persists the new to-do. This closes the gap between a broker revalidation await and mutation:
   /// a list deleted/renamed in that interval cannot receive an orphaned action-created to-do.
@@ -1245,6 +1293,21 @@ public actor IAgentLocalSyncStore {
     default:
       return nil
     }
+  }
+
+  private static func scrubbingMessageReplyAddresses(
+    from payload: IAgentSyncPayload
+  ) -> IAgentSyncPayload? {
+    guard case .messageConversation(var conversation) = payload else { return nil }
+    var changed = false
+    conversation.participants = conversation.participants.map { participant in
+      guard participant.replyAddress != nil else { return participant }
+      var scrubbed = participant
+      scrubbed.replyAddress = nil
+      changed = true
+      return scrubbed
+    }
+    return changed ? .messageConversation(conversation) : nil
   }
 
   private static func requiresPhysicalMessageDeletion(

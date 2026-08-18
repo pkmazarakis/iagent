@@ -530,6 +530,7 @@ final class PanelController: ObservableObject {
     @Published private(set) var messageRelayStates: [SyncedMessageRelayState] = []
     @Published private(set) var messageProviderAccess: MessageProviderAccessState = .loading
     @Published private(set) var messageProviderBackfillInFlight = false
+    @Published private(set) var messageReplyTransportEnabled = false
     @Published var selectedMessageConversationID: String?
     @Published var messageInboxFilter: MessageInboxFilter = .all
     private var messageInboxIndex = MessageInboxIndex()
@@ -1017,6 +1018,7 @@ final class PanelController: ObservableObject {
         preferences: UserDefaults = .standard
     ) {
         self.preferences = preferences
+        messageReplyTransportEnabled = MessageReplyPreferences.isEnabled(in: preferences)
         let fullName = NSFullUserName().trimmingCharacters(in: .whitespacesAndNewlines)
         localFirstName = fullName.split(whereSeparator: \.isWhitespace).first.map(String.init)
         isSmokeTest = smokeTest
@@ -1199,6 +1201,14 @@ final class PanelController: ObservableObject {
         messageProviderBackfillInFlight = true
         messageProviderTask = Task { [weak self] in
             guard let self else { return }
+            if !self.messageReplyTransportEnabled {
+                let scrubbedState = await self.desktopSync.scrubMessageReplyAddresses()
+                guard !Task.isCancelled else {
+                    self.finishMessageProviderBackfill(refreshGeneration)
+                    return
+                }
+                self.applyDesktopSyncState(scrubbedState, basedOn: nil)
+            }
             if !(self.messageProvider is MockMacMessagesProvider) {
                 let cleanedState = await self.desktopSync.removeDevelopmentMessageFixtures()
                 self.applyDesktopSyncState(cleanedState, basedOn: nil)
@@ -1287,6 +1297,27 @@ final class PanelController: ObservableObject {
             smokeTest: false,
             preferences: preferences,
             authorizedDatabaseURL: authorizedDatabaseURL,
+            requiresSecurityScopedDatabaseURL: sandboxAccess.isSandboxed
+        )
+        messageProviderAccess = .loading
+        startMessageProviderUpdates()
+    }
+
+    func setMessageReplyTransportEnabled(_ enabled: Bool) {
+        guard messageReplyTransportEnabled != enabled else { return }
+        MessageReplyPreferences.setEnabled(enabled, in: preferences)
+        messageReplyTransportEnabled = enabled
+
+        // Reply addresses are provider-authored routing data. Rebuild and run
+        // one authoritative backfill on both enable and disable so opt-in can
+        // publish them. The refresh scrubs them before checking source access
+        // on opt-out, so revocation also works while Messages is unavailable.
+        guard !isSmokeTest else { return }
+        let sandboxAccess = SandboxAccessManager.shared
+        messageProvider = MacMessageProviderFactory.make(
+            smokeTest: false,
+            preferences: preferences,
+            authorizedDatabaseURL: sandboxAccess.authorizedMessagesDatabaseURL,
             requiresSecurityScopedDatabaseURL: sandboxAccess.isSandboxed
         )
         messageProviderAccess = .loading

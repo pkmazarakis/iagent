@@ -3,9 +3,18 @@ import iAgentCore
 
 struct MessagesMobileView: View {
   @ObservedObject var model: MobileAppModel
+  private let replyTransport: any MobileMessageReplyTransport
   @State private var selectedConversation: MessageConversationRoute?
   @State private var filter: MobileMessageInboxFilter = .all
   @Environment(\.dismiss) private var dismiss
+
+  init(
+    model: MobileAppModel,
+    replyTransport: (any MobileMessageReplyTransport)? = nil
+  ) {
+    self.model = model
+    self.replyTransport = replyTransport ?? SystemMobileMessageReplyTransport()
+  }
 
   var body: some View {
     PanelScreen {
@@ -17,7 +26,11 @@ struct MessagesMobileView: View {
     }
     .toolbar(.hidden, for: .navigationBar)
     .sheet(item: $selectedConversation) { route in
-      MessagesHistorySheet(model: model, conversationID: route.id)
+      MessagesHistorySheet(
+        model: model,
+        conversationID: route.id,
+        replyTransport: replyTransport
+      )
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .presentationBackground(PanelTheme.sheet)
@@ -552,8 +565,14 @@ struct JoiMessageAvatar: View {
 private struct MessagesHistorySheet: View {
   @ObservedObject var model: MobileAppModel
   let conversationID: String
+  let replyTransport: any MobileMessageReplyTransport
 
   @Environment(\.dismiss) private var dismiss
+  @State private var draftBody = ""
+  @State private var selectedRecipientIDs = Set<String>()
+  @State private var composeRoute: MobileMessageComposeRoute?
+  @State private var replyAlert: MobileMessageReplyAlert?
+  @State private var replyTransportEnabled = MessageReplyPreferences.isEnabled(in: .standard)
 
   private var conversation: SyncedMessageConversation? {
     guard !model.messages(for: conversationID).isEmpty else { return nil }
@@ -578,6 +597,8 @@ private struct MessagesHistorySheet: View {
           header(conversation)
           JoiDottedDivider(inset: 20)
           history(conversation)
+          JoiDottedDivider(inset: 20)
+          replyComposer(conversation)
         }
       } else {
         VStack(spacing: 0) {
@@ -592,9 +613,52 @@ private struct MessagesHistorySheet: View {
       }
     }
     .background(PanelTheme.sheet.ignoresSafeArea())
+    .fullScreenCover(item: $composeRoute) { route in
+      MobileMessageReplyComposer(
+        request: route.request,
+        transport: replyTransport,
+        onCompletion: finishCompose
+      )
+      .ignoresSafeArea()
+    }
+    .alert(item: $replyAlert) { alert in
+      switch alert {
+      case .enable:
+        Alert(
+          title: Text("Enable reply handoff?"),
+          message: Text(
+            "This setting applies to every eligible one-to-one conversation in your rolling 14-day Messages inbox. iAgent can prepare a phone number and draft only when your Mac has separately opted in to share validated reply addresses through your private iCloud data. Apple's composer appears for review, and you choose whether to Send."
+          ),
+          primaryButton: .cancel(),
+          secondaryButton: .default(Text("Enable")) {
+            MessageReplyPreferences.setEnabled(true, in: .standard)
+            replyTransportEnabled = true
+            if let conversation {
+              reconcileRecipientSelection(for: conversation)
+            }
+          }
+        )
+      case let .notice(title, message):
+        Alert(
+          title: Text(title),
+          message: Text(message),
+          dismissButton: .default(Text("OK"))
+        )
+      }
+    }
     .task(id: latestIncomingMessageID) {
       guard latestIncomingMessageID != nil else { return }
       await model.markConversationRead(conversationID)
+    }
+    .onAppear {
+      if let conversation {
+        reconcileRecipientSelection(for: conversation)
+      }
+    }
+    .onChange(of: conversation?.participants ?? []) { _, _ in
+      if let conversation {
+        reconcileRecipientSelection(for: conversation)
+      }
     }
   }
 
@@ -673,6 +737,246 @@ private struct MessagesHistorySheet: View {
           proxy.scrollTo("messages-latest-anchor", anchor: .bottom)
         }
       }
+    }
+  }
+
+  @ViewBuilder
+  private func replyComposer(_ conversation: SyncedMessageConversation) -> some View {
+    if conversation.isGroup {
+      VStack(alignment: .leading, spacing: 6) {
+        HStack(spacing: 8) {
+          Image(systemName: "person.2.slash")
+          Text("Group replies are not available yet")
+            .fontWeight(.semibold)
+          Spacer(minLength: 12)
+          if replyTransportEnabled {
+            Button("Turn off") { setReplyTransportEnabled(false) }
+          }
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(PanelTheme.secondary)
+
+        Text("Phase 1 supports one-to-one conversations only. This group stays read only.")
+          .font(.system(size: 10, weight: .medium))
+          .foregroundStyle(PanelTheme.tertiary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      .padding(.horizontal, 20)
+      .padding(.vertical, 12)
+    } else if !replyTransportEnabled {
+      HStack(spacing: 12) {
+        Label("Read-only inbox", systemImage: "lock")
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(PanelTheme.secondary)
+
+        Spacer(minLength: 12)
+
+        Button("Enable replies") {
+          replyAlert = .enable
+        }
+        .font(.system(size: 12, weight: .bold))
+        .foregroundStyle(PanelTheme.blue)
+        .frame(minHeight: 44)
+        .accessibilityHint("Explains the user-confirmed Apple Messages handoff")
+      }
+      .padding(.horizontal, 20)
+      .padding(.vertical, 8)
+    } else if eligibleRecipients(for: conversation).isEmpty {
+      VStack(alignment: .leading, spacing: 6) {
+        HStack(spacing: 8) {
+          Image(systemName: "person.crop.circle.badge.exclamationmark")
+          Text("Recipient unavailable")
+            .fontWeight(.semibold)
+          Spacer(minLength: 12)
+          Button("Turn off") { setReplyTransportEnabled(false) }
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(PanelTheme.secondary)
+
+        Text(
+          "Enable reply handoff on the Mac that provides Messages, then sync again. iPhone replies require a validated phone number; names, email handles, and IDs are never guessed."
+        )
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(PanelTheme.tertiary)
+        .fixedSize(horizontal: false, vertical: true)
+      }
+      .padding(.horizontal, 20)
+      .padding(.vertical, 12)
+    } else {
+      VStack(spacing: 8) {
+        HStack(spacing: 10) {
+          recipientMenu(conversation)
+
+          TextField("Write a reply", text: $draftBody, axis: .vertical)
+            .lineLimit(1...4)
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(PanelTheme.primary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(PanelTheme.raisedSurface, in: RoundedRectangle(cornerRadius: 14))
+            .onChange(of: draftBody) { _, value in
+              guard value.count > MessageReplyRequest.maximumBodyCharacterCount else { return }
+              draftBody = String(value.prefix(MessageReplyRequest.maximumBodyCharacterCount))
+            }
+
+          Button(action: { openSystemComposer(for: conversation) }) {
+            Image(systemName: "arrow.up")
+              .font(.system(size: 14, weight: .bold))
+              .foregroundStyle(canOpenComposer(for: conversation) ? Color.white : PanelTheme.tertiary)
+              .frame(width: 42, height: 42)
+              .background(
+                canOpenComposer(for: conversation) ? PanelTheme.blue : PanelTheme.surface,
+                in: Circle()
+              )
+          }
+          .buttonStyle(.plain)
+          .disabled(!canOpenComposer(for: conversation))
+          .accessibilityLabel("Review reply in Messages")
+          .accessibilityHint("Opens Apple's composer; Send still requires your confirmation")
+        }
+
+        HStack {
+          Text("Apple's composer always asks you to review and Send.")
+          Spacer(minLength: 12)
+          Button("Turn off") { setReplyTransportEnabled(false) }
+        }
+        .font(.system(size: 9, weight: .semibold))
+        .foregroundStyle(PanelTheme.tertiary)
+      }
+      .padding(.horizontal, 18)
+      .padding(.top, 10)
+      .padding(.bottom, 12)
+    }
+  }
+
+  private func recipientMenu(_ conversation: SyncedMessageConversation) -> some View {
+    let recipients = eligibleRecipients(for: conversation)
+    return Menu {
+      ForEach(recipients) { recipient in
+        Button {
+          selectedRecipientIDs = selectedRecipientIDs.contains(recipient.id)
+            ? Set<String>()
+            : Set([recipient.id])
+        } label: {
+          Label(
+            recipient.displayName,
+            systemImage: selectedRecipientIDs.contains(recipient.id)
+              ? "checkmark.circle.fill"
+              : "circle"
+          )
+        }
+      }
+    } label: {
+      VStack(alignment: .leading, spacing: 2) {
+        Text("TO")
+          .font(.system(size: 8, weight: .bold))
+          .foregroundStyle(PanelTheme.tertiary)
+        Text(recipientSummary(in: recipients))
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(PanelTheme.secondary)
+          .lineLimit(1)
+      }
+      .frame(width: 78, alignment: .leading)
+      .frame(minHeight: 42, alignment: .leading)
+      .contentShape(Rectangle())
+    }
+    .accessibilityLabel("Reply recipients")
+    .accessibilityValue(recipientSummary(in: recipients))
+  }
+
+  private func eligibleRecipients(
+    for conversation: SyncedMessageConversation
+  ) -> [MessageReplyRecipient] {
+    guard !conversation.isGroup else { return [] }
+    conversation.participants
+      .compactMap(MessageReplyRecipient.init(participant:))
+      .filter { $0.address.kind == .phone }
+  }
+
+  private func selectedRecipients(
+    for conversation: SyncedMessageConversation
+  ) -> [MessageReplyRecipient] {
+    eligibleRecipients(for: conversation).filter { selectedRecipientIDs.contains($0.id) }
+  }
+
+  private func recipientSummary(in recipients: [MessageReplyRecipient]) -> String {
+    let selected = recipients.filter { selectedRecipientIDs.contains($0.id) }
+    if selected.isEmpty { return "Choose" }
+    return selected[0].displayName
+  }
+
+  private func reconcileRecipientSelection(for conversation: SyncedMessageConversation) {
+    let validIDs = Set(eligibleRecipients(for: conversation).map(\.id))
+    selectedRecipientIDs.formIntersection(validIDs)
+    if selectedRecipientIDs.count != 1 {
+      selectedRecipientIDs = eligibleRecipients(for: conversation).first
+        .map { Set([$0.id]) } ?? Set<String>()
+    }
+  }
+
+  private func canOpenComposer(for conversation: SyncedMessageConversation) -> Bool {
+    !conversation.isGroup
+      && replyTransport.canSendText()
+      && selectedRecipients(for: conversation).count == 1
+      && !draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  private func openSystemComposer(for conversation: SyncedMessageConversation) {
+    do {
+      let request = try MessageReplyRequest(
+        recipients: selectedRecipients(for: conversation),
+        body: draftBody
+      )
+      composeRoute = MobileMessageComposeRoute(request: request)
+    } catch {
+      replyAlert = .notice(
+        title: "Cannot prepare reply",
+        message: error.localizedDescription
+      )
+    }
+  }
+
+  private func finishCompose(_ completion: MessageReplyCompletion) {
+    composeRoute = nil
+    switch completion {
+    case .cancelled:
+      break
+    case .sendRequested:
+      draftBody = ""
+      replyAlert = .notice(
+        title: "Send requested",
+        message: "You confirmed Send in Apple's composer. Messages handles delivery; iAgent cannot verify it."
+      )
+    case .failed(let detail):
+      replyAlert = .notice(title: "Messages could not continue", message: detail)
+    }
+  }
+
+  private func setReplyTransportEnabled(_ enabled: Bool) {
+    MessageReplyPreferences.setEnabled(enabled, in: .standard)
+    replyTransportEnabled = enabled
+    if !enabled {
+      draftBody = ""
+      composeRoute = nil
+    }
+  }
+}
+
+private struct MobileMessageComposeRoute: Identifiable {
+  let id = UUID()
+  let request: MessageReplyRequest
+}
+
+private enum MobileMessageReplyAlert: Identifiable {
+  case enable
+  case notice(title: String, message: String)
+
+  var id: String {
+    switch self {
+    case .enable:
+      "enable"
+    case let .notice(title, message):
+      "notice:\(title):\(message)"
     }
   }
 }

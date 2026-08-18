@@ -356,6 +356,25 @@ actor DesktopSyncCoordinator {
     }
   }
 
+  /// Removes opt-in routing data from every cached conversation without
+  /// requiring fresh access to Messages. This makes revocation durable even
+  /// when the source database is temporarily unavailable, while preserving the
+  /// otherwise read-only conversation projection.
+  func scrubMessageReplyAddresses() async -> DesktopWritableSyncState {
+    do {
+      let changed = try await store.scrubMessageReplyAddresses()
+      let localState = await writableState()
+      if changed, let cloud {
+        Task(priority: .utility) {
+          await cloud.pushLocalChanges()
+        }
+      }
+      return localState
+    } catch {
+      return await writableState(failure: error)
+    }
+  }
+
   func publishMessageRelayState(
     _ access: MessageProviderAccessState
   ) async -> DesktopWritableSyncState {

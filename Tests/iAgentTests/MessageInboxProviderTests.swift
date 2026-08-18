@@ -279,7 +279,7 @@ final class MessageInboxProviderTests: XCTestCase {
     XCTAssertFalse(conversation.displayName.contains("Contact"))
   }
 
-  func testLocalProviderUsesLowercaseEmailWhenNoPhoneExists() async throws {
+  func testLocalProviderUsesLowercaseEmailForDisplayButPreservesReplyLocalPart() async throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent(
         "iagent-message-provider-email-fallback-test-\(UUID().uuidString)",
@@ -313,6 +313,17 @@ final class MessageInboxProviderTests: XCTestCase {
 
     XCTAssertEqual(snapshot.conversations.first?.displayName, "avery.chen@example.com")
     XCTAssertEqual(snapshot.messages.first?.senderDisplayName, "avery.chen@example.com")
+
+    let replyEnabledProvider = LocalMacMessagesProvider(
+      databaseURL: databaseURL,
+      contactNameResolver: StubContactNameResolver(),
+      includesReplyAddresses: true
+    )
+    let replyEnabled = try await replyEnabledProvider.backfill(since: cutoff)
+    XCTAssertEqual(
+      replyEnabled.conversations.first?.participants.first?.replyAddress,
+      "Avery.Chen@example.com"
+    )
   }
 
   func testLocalProviderResolvesContactNameTransientlyAndKeepsNamedGroupAuthoritative() async throws {
@@ -344,6 +355,18 @@ final class MessageInboxProviderTests: XCTestCase {
     XCTAssertFalse(conversation.id.contains("+15551234567"))
     XCTAssertFalse(conversation.participants.contains { $0.id.contains("+15551234567") })
     XCTAssertFalse(message.senderID?.contains("+15551234567") == true)
+    XCTAssertNil(conversation.participants.first?.replyAddress)
+
+    let replyEnabledProvider = LocalMacMessagesProvider(
+      databaseURL: databaseURL,
+      contactNameResolver: resolver,
+      includesReplyAddresses: true
+    )
+    let replyEnabled = try await replyEnabledProvider.backfill(since: cutoff)
+    let replyParticipant = try XCTUnwrap(replyEnabled.conversations.first?.participants.first)
+    XCTAssertEqual(replyParticipant.displayName, "Avery Chen")
+    XCTAssertEqual(replyParticipant.replyAddress, "+15551234567")
+    XCTAssertFalse(replyParticipant.id.contains(replyParticipant.replyAddress ?? ""))
 
     try execute(
       "UPDATE chat SET display_name = 'Weekend Plans', style = 43 WHERE ROWID = 1",

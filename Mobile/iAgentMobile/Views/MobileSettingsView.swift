@@ -14,6 +14,9 @@ struct MobileSettingsView: View {
   @Environment(\.scenePhase) private var scenePhase
   @State private var permissions = MobilePermissionSnapshot.current()
   @State private var isSyncRequested = false
+  @State private var messageReplyTransportEnabled = MessageReplyPreferences.isEnabled(
+    in: .standard
+  )
 
   init(model: MobileAppModel) {
     self.model = model
@@ -26,6 +29,7 @@ struct MobileSettingsView: View {
     Form {
       syncSection
       permissionsSection
+      messageRepliesSection
       assistantActionsSection
       liveActivitySection
       privacySection
@@ -181,6 +185,52 @@ struct MobileSettingsView: View {
       )
     }
     .task { await actionSettings.load() }
+  }
+
+  private var messageRepliesSection: some View {
+    Section {
+      Toggle(isOn: messageReplyTransportBinding) {
+        Label {
+          VStack(alignment: .leading, spacing: 3) {
+            Text("Messages reply handoff")
+            Text(
+              messageReplyTransportEnabled
+                ? "System composer available in message history"
+                : "Inbox stays read only"
+            )
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+          }
+        } icon: {
+          Image(systemName: "message.badge")
+            .foregroundStyle(messageReplyTransportEnabled ? PanelTheme.green : Color.secondary)
+        }
+      }
+      .tint(PanelTheme.green)
+      .frame(minHeight: 44)
+      .accessibilityHint(
+        messageReplyTransportEnabled
+          ? "Turns off reply preparation and keeps message history read only"
+          : "Allows local drafts to open in Apple's message composer for your review and Send confirmation"
+      )
+      .accessibilityIdentifier("settings.messages.reply-handoff.toggle")
+    } header: {
+      settingsSectionHeader("Messages")
+    } footer: {
+      Text(
+        "Off by default. This setting applies to every eligible one-to-one conversation in your rolling 14-day Messages inbox. When enabled, iAgent can prepare a phone number and body, but Apple's composer always appears and you decide whether to send. iAgent cannot send in the background or confirm delivery. Recipient phone numbers come from your separately opted-in Mac Messages source through your private iCloud data."
+      )
+    }
+  }
+
+  private var messageReplyTransportBinding: Binding<Bool> {
+    Binding(
+      get: { messageReplyTransportEnabled },
+      set: { enabled in
+        MessageReplyPreferences.setEnabled(enabled, in: .standard)
+        messageReplyTransportEnabled = enabled
+      }
+    )
   }
 
   private func assistantActionBinding(

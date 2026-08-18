@@ -56,9 +56,10 @@ struct MessageInboxView: View {
         Group {
             if let selectedConversation {
                 MessageConversationPage(
+                    controller: controller,
                     conversation: selectedConversation,
                     messages: controller.retainedMessages(for: selectedConversation.id),
-                    onBack: controller.closeMessageConversation
+                    replyTransport: AppStoreMessagesHandoffTransport()
                 )
             } else if controller.visibleMessageConversations.isEmpty {
                 availabilityState
@@ -339,9 +340,26 @@ private struct MessageConversationRow: View {
 }
 
 private struct MessageConversationPage: View {
+    @ObservedObject var controller: PanelController
     let conversation: SyncedMessageConversation
     let messages: [SyncedMessage]
-    let onBack: () -> Void
+    @State private var replyTransport: any MacMessageReplyTransport
+    @State private var draftBody = ""
+    @State private var selectedRecipientIDs = Set<String>()
+    @State private var pendingRequest: MessageReplyRequest?
+    @State private var replyAlert: MacMessageReplyAlert?
+
+    init(
+        controller: PanelController,
+        conversation: SyncedMessageConversation,
+        messages: [SyncedMessage],
+        replyTransport: any MacMessageReplyTransport
+    ) {
+        self.controller = controller
+        self.conversation = conversation
+        self.messages = messages
+        _replyTransport = State(initialValue: replyTransport)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -349,12 +367,16 @@ private struct MessageConversationPage: View {
                 title: "Back to Messages",
                 titleRole: .messages,
                 placement: .navigation,
-                onBack: onBack,
+                onBack: controller.closeMessageConversation,
                 backHelp: "Back to Messages",
                 focusesBackOnAppear: true,
                 titleActsAsBackLabel: true
             ) {
-                Text("Read only")
+                Text(
+                    conversation.isGroup
+                        ? "Read only"
+                        : controller.messageReplyTransportEnabled ? "Messages handoff" : "Read only"
+                )
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(.white.opacity(0.3))
             }
@@ -387,10 +409,301 @@ private struct MessageConversationPage: View {
                 conversation: conversation,
                 messages: messages
             )
+
+            Rectangle()
+                .fill(.white.opacity(0.055))
+                .frame(height: 1)
+
+            replyComposer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Conversation with \(conversation.displayName)")
+        .onAppear(perform: reconcileRecipientSelection)
+        .onChange(of: eligibleRecipients.map(\.id)) {
+            reconcileRecipientSelection()
+        }
+        .alert(item: $replyAlert) { alert in
+            switch alert {
+            case .enable:
+                Alert(
+                    title: Text("Enable Messages handoff?"),
+                    message: Text(
+                        "This setting applies to every eligible one-to-one conversation in your rolling 14-day Messages inbox. iAgent will include validated recipient addresses in your private iCloud message projection so replies can also be prepared on iPhone. Every draft is handed to Apple's Messages UI for review; iAgent never presses Send or confirms delivery."
+                    ),
+                    primaryButton: .cancel(),
+                    secondaryButton: .default(Text("Enable")) {
+                        controller.setMessageReplyTransportEnabled(true)
+                    }
+                )
+            case .confirm:
+                Alert(
+                    title: Text("Open in Messages?"),
+                    message: Text(
+                        "The selected recipient and this draft will be handed to macOS. If Messages opens, review them there; iAgent will not press Send and cannot verify that the compose window opened, the message was sent, or delivered."
+                    ),
+                    primaryButton: .cancel {
+                        pendingRequest = nil
+                    },
+                    secondaryButton: .default(Text("Open Messages")) {
+                        beginConfirmedHandoff()
+                    }
+                )
+            case let .notice(title, message):
+                Alert(
+                    title: Text(title),
+                    message: Text(message),
+                    dismissButton: .default(Text("OK"))
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var replyComposer: some View {
+        if conversation.isGroup {
+            HStack(spacing: 9) {
+                Image(systemName: "person.2.slash")
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Group replies are not available yet")
+                        .fontWeight(.semibold)
+                    Text("Phase 1 supports one-to-one conversations only. This group stays read only.")
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+
+                Spacer(minLength: 10)
+
+                if controller.messageReplyTransportEnabled {
+                    Button("Turn off") { setReplyTransportEnabled(false) }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.agentBlue)
+                }
+            }
+            .font(.system(size: 9.5, weight: .medium))
+            .foregroundStyle(.white.opacity(0.42))
+            .padding(.horizontal, PanelPageLayout.contentInset)
+            .frame(minHeight: 50)
+        } else if !controller.messageReplyTransportEnabled {
+            HStack(spacing: 10) {
+                Label("Read-only inbox", systemImage: "lock")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.42))
+
+                Spacer(minLength: 12)
+
+                Button("Enable replies") {
+                    replyAlert = .enable
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(Color.agentBlue)
+                .frame(minHeight: 36)
+                .accessibilityHint("Explains the public, user-confirmed Messages handoff")
+            }
+            .padding(.horizontal, PanelPageLayout.contentInset)
+            .frame(minHeight: 48)
+        } else if eligibleRecipients.isEmpty {
+            HStack(spacing: 9) {
+                Image(systemName: "person.crop.circle.badge.exclamationmark")
+                Text(
+                    controller.isMessageInboxSyncing
+                        ? "Refreshing reply recipients…"
+                        : "No validated reply recipient is available."
+                )
+                .lineLimit(2)
+
+                Spacer(minLength: 10)
+
+                Button("Turn off") { setReplyTransportEnabled(false) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.agentBlue)
+            }
+            .font(.system(size: 9.5, weight: .medium))
+            .foregroundStyle(.white.opacity(0.42))
+            .padding(.horizontal, PanelPageLayout.contentInset)
+            .frame(minHeight: 50)
+        } else {
+            VStack(spacing: 5) {
+                HStack(spacing: 8) {
+                    recipientMenu
+
+                    TextField("Write a reply", text: $draftBody, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .lineLimit(1...3)
+                        .font(.system(size: 10.5, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 7)
+                        .background(
+                            .white.opacity(0.055),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        )
+                        .onChange(of: draftBody) {
+                            guard draftBody.count > MessageReplyRequest.maximumBodyCharacterCount
+                            else { return }
+                            draftBody = String(
+                                draftBody.prefix(MessageReplyRequest.maximumBodyCharacterCount)
+                            )
+                        }
+
+                    Button {
+                        prepareHandoffConfirmation()
+                    } label: {
+                        Image(systemName: "arrow.up.right.square")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 30, height: 30)
+                            .background(
+                                canPrepareHandoff
+                                    ? Color.agentBlue.opacity(0.2)
+                                    : Color.white.opacity(0.04),
+                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(
+                        canPrepareHandoff ? Color.agentBlue : Color.white.opacity(0.24)
+                    )
+                    .disabled(!canPrepareHandoff)
+                    .help("Review in Messages")
+                    .accessibilityLabel("Review reply in Messages")
+                    .accessibilityHint(
+                        "Confirms the handoff before opening Apple's Messages compose UI"
+                    )
+                }
+
+                HStack {
+                    Text("No background send · Messages asks you to review")
+                    Spacer(minLength: 10)
+                    Button("Turn off") { setReplyTransportEnabled(false) }
+                        .buttonStyle(.plain)
+                }
+                .font(.system(size: 8.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.28))
+            }
+            .padding(.horizontal, PanelPageLayout.contentInset)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private var recipientMenu: some View {
+        Menu {
+            ForEach(eligibleRecipients) { recipient in
+                Button {
+                    selectedRecipientIDs = selectedRecipientIDs.contains(recipient.id)
+                        ? Set<String>()
+                        : Set([recipient.id])
+                } label: {
+                    Label(
+                        recipient.displayName,
+                        systemImage: selectedRecipientIDs.contains(recipient.id)
+                            ? "checkmark.circle.fill"
+                            : "circle"
+                    )
+                }
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("TO")
+                    .font(.system(size: 7.5, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.26))
+                Text(recipientSummary)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.58))
+                    .lineLimit(1)
+            }
+            .frame(width: 82, height: 30, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .accessibilityLabel("Reply recipients")
+        .accessibilityValue(recipientSummary)
+    }
+
+    private var eligibleRecipients: [MessageReplyRecipient] {
+        guard !conversation.isGroup else { return [] }
+        conversation.participants.compactMap(MessageReplyRecipient.init(participant:))
+    }
+
+    private var selectedRecipients: [MessageReplyRecipient] {
+        eligibleRecipients.filter { selectedRecipientIDs.contains($0.id) }
+    }
+
+    private var recipientSummary: String {
+        if selectedRecipients.isEmpty { return "Choose" }
+        return selectedRecipients[0].displayName
+    }
+
+    private var canPrepareHandoff: Bool {
+        !conversation.isGroup
+            && selectedRecipients.count == 1
+            && !draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func reconcileRecipientSelection() {
+        let validIDs = Set(eligibleRecipients.map(\.id))
+        selectedRecipientIDs.formIntersection(validIDs)
+        if selectedRecipientIDs.count != 1 {
+            selectedRecipientIDs = eligibleRecipients.first.map { Set([$0.id]) }
+                ?? Set<String>()
+        }
+    }
+
+    private func prepareHandoffConfirmation() {
+        do {
+            pendingRequest = try MessageReplyRequest(
+                recipients: selectedRecipients,
+                body: draftBody
+            )
+            replyAlert = .confirm
+        } catch {
+            replyAlert = .notice(
+                title: "Cannot prepare handoff",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    private func beginConfirmedHandoff() {
+        guard let request = pendingRequest else { return }
+        defer { pendingRequest = nil }
+        do {
+            _ = try replyTransport.beginUserConfirmedHandoff(request)
+            replyAlert = .notice(
+                title: "Messages handoff requested",
+                message: "macOS received the handoff request. If Messages opens, review the recipient and draft there, then choose whether to Send. iAgent cannot confirm that the compose window opened, the message was sent, or delivered."
+            )
+        } catch {
+            replyAlert = .notice(
+                title: "Messages handoff unavailable",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    private func setReplyTransportEnabled(_ enabled: Bool) {
+        controller.setMessageReplyTransportEnabled(enabled)
+        if !enabled {
+            draftBody = ""
+            pendingRequest = nil
+        }
+    }
+}
+
+private enum MacMessageReplyAlert: Identifiable {
+    case enable
+    case confirm
+    case notice(title: String, message: String)
+
+    var id: String {
+        switch self {
+        case .enable:
+            "enable"
+        case .confirm:
+            "confirm"
+        case let .notice(title, message):
+            "notice:\(title):\(message)"
+        }
     }
 }
 

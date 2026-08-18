@@ -796,7 +796,10 @@ enum MacMessageProviderFactory {
       || localAccessIsEnabled(preferences: preferences)
     {
       if let authorizedDatabaseURL {
-        return LocalMacMessagesProvider(databaseURL: authorizedDatabaseURL)
+        return LocalMacMessagesProvider(
+          databaseURL: authorizedDatabaseURL,
+          includesReplyAddresses: MessageReplyPreferences.isEnabled(in: preferences)
+        )
       }
       if requiresSecurityScopedDatabaseURL {
         return DisabledMacMessagesProvider(
@@ -804,7 +807,9 @@ enum MacMessageProviderFactory {
             "Reconnect Messages and choose your Messages folder to restore read-only access."
         )
       }
-      return LocalMacMessagesProvider()
+      return LocalMacMessagesProvider(
+        includesReplyAddresses: MessageReplyPreferences.isEnabled(in: preferences)
+      )
     }
 
     // The source path is not even inspected before the user opts in. Once they
@@ -910,22 +915,26 @@ final class MockMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
     let avery = SyncedMessageParticipant(
       id: "mock-participant-avery",
       displayName: "Avery Chen",
-      isContactNameResolved: true
+      isContactNameResolved: true,
+      replyAddress: "+15555550101"
     )
     let maya = SyncedMessageParticipant(
       id: "mock-participant-maya",
       displayName: "Maya Ortiz",
-      isContactNameResolved: true
+      isContactNameResolved: true,
+      replyAddress: "+15555550102"
     )
     let jordan = SyncedMessageParticipant(
       id: "mock-participant-jordan",
       displayName: "Jordan Lee",
-      isContactNameResolved: true
+      isContactNameResolved: true,
+      replyAddress: "+15555550103"
     )
     let sam = SyncedMessageParticipant(
       id: "mock-participant-sam",
       displayName: "Sam Rivera",
-      isContactNameResolved: true
+      isContactNameResolved: true,
+      replyAddress: "+15555550104"
     )
 
     let averyMessages = [
@@ -1137,7 +1146,8 @@ final class MockMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
     let participant = SyncedMessageParticipant(
       id: "mock-participant-avery",
       displayName: "Avery Chen",
-      isContactNameResolved: true
+      isContactNameResolved: true,
+      replyAddress: "+15555550101"
     )
     let message = mockMessage(
       id: "mock-message-avery-live-1",
@@ -1228,6 +1238,7 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
   private let pollingInterval: Duration
   private let snapshotLoadObserver: (@Sendable () -> Void)?
   private let contactNameResolver: any MessageContactNameResolving
+  private let includesReplyAddresses: Bool
 
   var configuredDatabaseURL: URL { databaseURL }
 
@@ -1236,12 +1247,14 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
       .appendingPathComponent("Library/Messages/chat.db"),
     pollingInterval: Duration = .milliseconds(1_500),
     snapshotLoadObserver: (@Sendable () -> Void)? = nil,
-    contactNameResolver: any MessageContactNameResolving = ContactsMessageNameResolver()
+    contactNameResolver: any MessageContactNameResolving = ContactsMessageNameResolver(),
+    includesReplyAddresses: Bool = false
   ) {
     self.databaseURL = databaseURL
     self.pollingInterval = pollingInterval
     self.snapshotLoadObserver = snapshotLoadObserver
     self.contactNameResolver = contactNameResolver
+    self.includesReplyAddresses = includesReplyAddresses
   }
 
   func authorizationStatus() async -> MessageProviderAccessState {
@@ -1255,6 +1268,7 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
     let databaseURL = databaseURL
     let snapshotLoadObserver = snapshotLoadObserver
     let contactNameResolver = contactNameResolver
+    let includesReplyAddresses = includesReplyAddresses
     let effectiveCutoff = max(
       cutoff,
       MessageSyncWindow.cutoff(referenceDate: Date())
@@ -1264,7 +1278,8 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
       return try Self.loadSnapshot(
         from: databaseURL,
         since: effectiveCutoff,
-        contactNameResolver: contactNameResolver
+        contactNameResolver: contactNameResolver,
+        includesReplyAddresses: includesReplyAddresses
       )
     }.value
   }
@@ -1274,6 +1289,7 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
     let pollingInterval = pollingInterval
     let snapshotLoadObserver = snapshotLoadObserver
     let contactNameResolver = contactNameResolver
+    let includesReplyAddresses = includesReplyAddresses
 
     return AsyncThrowingStream { continuation in
       let task = Task.detached(priority: .utility) {
@@ -1303,7 +1319,8 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
               let snapshot = try Self.loadSnapshot(
                 from: databaseURL,
                 since: effectiveCutoff,
-                contactNameResolver: contactNameResolver
+                contactNameResolver: contactNameResolver,
+                includesReplyAddresses: includesReplyAddresses
               )
               let signatureAfterLoad = try Self.sourceSignature(for: databaseURL)
               let contactGenerationAfterLoad = contactNameResolver.changeGeneration
@@ -1474,7 +1491,8 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
   private static func loadSnapshot(
     from databaseURL: URL,
     since cutoff: Date,
-    contactNameResolver: any MessageContactNameResolving
+    contactNameResolver: any MessageContactNameResolving,
+    includesReplyAddresses: Bool
   ) throws -> MessageProviderBatch {
     guard FileManager.default.isReadableFile(atPath: databaseURL.path) else {
       throw LocalMessagesProviderError.permissionRequired
@@ -1496,7 +1514,8 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
       from: database,
       schema: schema,
       since: cutoff,
-      contactNameResolver: contactNameResolver
+      contactNameResolver: contactNameResolver,
+      includesReplyAddresses: includesReplyAddresses
     )
     return MessageProviderBatch(
       conversations: loaded.conversations,
@@ -1618,6 +1637,7 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
   private struct ParticipantPresentation {
     let displayName: String
     let priority: Int
+    let replyAddress: String?
 
     var isContactNameResolved: Bool { priority == 0 }
   }
@@ -1631,7 +1651,8 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
     from database: OpaquePointer,
     schema: MessagesSchema,
     since cutoff: Date,
-    contactNameResolver: any MessageContactNameResolving
+    contactNameResolver: any MessageContactNameResolving,
+    includesReplyAddresses: Bool
   ) throws -> LoadedMessages {
     let message = schema.messageColumns
     let chat = schema.chatColumns
@@ -1716,7 +1737,7 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
     func participantPresentation(for rawHandle: String) -> ParticipantPresentation {
       let handle = rawHandle.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !handle.isEmpty else {
-        return ParticipantPresentation(displayName: "Contact", priority: 3)
+        return ParticipantPresentation(displayName: "Contact", priority: 3, replyAddress: nil)
       }
       if let cached = presentationsByHandle[handle] {
         return cached
@@ -1725,24 +1746,37 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
         let safe = safeDisplayName($0, disallowing: [handle])
         return safe.isEmpty ? nil : safe
       }
+      let replyAddress = includesReplyAddresses
+        ? MessageReplyAddress(rawValue: handle)?.value
+        : nil
       let presentation: ParticipantPresentation
       if let resolved {
-        presentation = ParticipantPresentation(displayName: resolved, priority: 0)
+        presentation = ParticipantPresentation(
+          displayName: resolved,
+          priority: 0,
+          replyAddress: replyAddress
+        )
       } else if let identifier = MessageContactIdentifier.normalized(handle) {
         switch identifier {
         case .phone:
           presentation = ParticipantPresentation(
             displayName: identifier.privacySafeDisplayValue(source: handle),
-            priority: 1
+            priority: 1,
+            replyAddress: replyAddress
           )
         case .email:
           presentation = ParticipantPresentation(
             displayName: identifier.privacySafeDisplayValue(source: handle),
-            priority: 2
+            priority: 2,
+            replyAddress: replyAddress
           )
         }
       } else {
-        presentation = ParticipantPresentation(displayName: "Contact", priority: 3)
+        presentation = ParticipantPresentation(
+          displayName: "Contact",
+          priority: 3,
+          replyAddress: nil
+        )
       }
       presentationsByHandle[handle] = presentation
       return presentation
@@ -1883,7 +1917,8 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
         accumulator.participantsByID[senderID] = SyncedMessageParticipant(
           id: senderID,
           displayName: senderDisplayName,
-          isContactNameResolved: senderDisplayPriority == 0
+          isContactNameResolved: senderDisplayPriority == 0,
+          replyAddress: participantPresentation(for: rawParticipantHandle).replyAddress
         )
         accumulator.participantDisplayPrioritiesByID[senderID] = senderDisplayPriority
       }
@@ -1945,7 +1980,8 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
           SyncedMessageParticipant(
             id: fallbackID,
             displayName: presentation.displayName,
-            isContactNameResolved: presentation.isContactNameResolved
+            isContactNameResolved: presentation.isContactNameResolved,
+            replyAddress: presentation.replyAddress
           )
         ]
       }
@@ -2046,7 +2082,8 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
           participant: SyncedMessageParticipant(
             id: namespacedID("participant", raw: rawIdentity),
             displayName: presentation.displayName,
-            isContactNameResolved: presentation.isContactNameResolved
+            isContactNameResolved: presentation.isContactNameResolved,
+            replyAddress: presentation.replyAddress
           ),
           displayPriority: presentation.priority
         )
