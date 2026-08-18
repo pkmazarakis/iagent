@@ -8,6 +8,7 @@ struct TodosMobileView: View {
 
   @FocusState private var isQuickCreateFocused: Bool
   @State private var quickTitle = ""
+  @State private var quickMentionSelectionID: String?
   @State private var isQuickCreateActive = false
   @State private var isQuickSaveInFlight = false
   @State private var showsCompleted = false
@@ -155,15 +156,26 @@ struct TodosMobileView: View {
       HStack(spacing: 8) {
         Group {
           if isQuickCreateActive {
-            TextField("New To-do", text: $quickTitle)
-              .focused($isQuickCreateFocused)
-              .font(.system(size: 16, weight: .semibold))
-              .foregroundStyle(PanelTheme.primary)
-              .tint(PanelTheme.coral)
-              .textFieldStyle(.plain)
-              .submitLabel(.done)
-              .onSubmit { Task { await submitQuickTodo() } }
-              .accessibilityIdentifier("todo-quick-title")
+            ArtifactMentionAttachedField(
+              text: $quickTitle,
+              mentions: model.artifactMentions,
+              writesMarkdown: false,
+              isActive: isQuickCreateFocused,
+              selectedMentionID: $quickMentionSelectionID
+            ) {
+              TextField("New To-do", text: $quickTitle)
+                .focused($isQuickCreateFocused)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(PanelTheme.primary)
+                .tint(PanelTheme.coral)
+                .textFieldStyle(.plain)
+                .submitLabel(.done)
+                .onSubmit { Task { await submitQuickTodo() } }
+                .onKeyPress(.upArrow) { handleQuickMentionKey(.previous) }
+                .onKeyPress(.downArrow) { handleQuickMentionKey(.next) }
+                .onKeyPress(.return) { handleQuickMentionKey(.select) }
+                .accessibilityIdentifier("todo-quick-title")
+            }
           } else {
             JoiDrawerButton(action: activateQuickCreate) {
               Text("Create new task")
@@ -252,6 +264,18 @@ struct TodosMobileView: View {
 
   private var voiceSymbolColor: Color {
     todoDictation.isRecording ? .white : .black
+  }
+
+  private func handleQuickMentionKey(
+    _ command: ArtifactMentionKeyCommand
+  ) -> KeyPress.Result {
+    handleArtifactMentionKeyCommand(
+      command,
+      text: $quickTitle,
+      mentions: model.artifactMentions,
+      writesMarkdown: false,
+      selectedMentionID: $quickMentionSelectionID
+    ) ? .handled : .ignored
   }
 
   private func activateQuickCreate() {

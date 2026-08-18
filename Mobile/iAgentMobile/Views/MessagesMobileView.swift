@@ -4,11 +4,12 @@ import iAgentCore
 struct MessagesMobileView: View {
   @ObservedObject var model: MobileAppModel
   @State private var selectedConversation: MessageConversationRoute?
+  @State private var filter: MobileMessageInboxFilter = .all
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     PanelScreen {
-      JoiDrawerPage(restingFraction: 0.38) {
+      JoiDrawerPage(restingFraction: 0.44) {
         hero
       } drawer: {
         inbox
@@ -49,6 +50,9 @@ struct MessagesMobileView: View {
         .lineSpacing(3)
         .padding(.top, 30)
         .fixedSize(horizontal: false, vertical: true)
+
+      messageFilters
+        .padding(.top, 14)
     }
     .padding(.horizontal, PanelTheme.horizontalPadding)
     .padding(.top, 14)
@@ -68,8 +72,67 @@ struct MessagesMobileView: View {
       .foregroundStyle(PanelTheme.secondary)
   }
 
+  private var messageFilters: some View {
+    HStack(spacing: 10) {
+      messageFilterButton(
+        filter: .awaitingReply,
+        count: model.awaitingReplyConversationCount,
+        label: "awaiting",
+        color: PanelTheme.amber
+      )
+
+      messageFilterButton(
+        filter: .unread,
+        count: model.unreadConversationCount,
+        label: "unread",
+        color: PanelTheme.coral
+      )
+    }
+  }
+
+  private func messageFilterButton(
+    filter targetFilter: MobileMessageInboxFilter,
+    count: Int,
+    label: String,
+    color: Color
+  ) -> some View {
+    let isActive = filter == targetFilter
+    return Button {
+      withAnimation(PanelTheme.quick) {
+        filter = filter.toggled(with: targetFilter)
+      }
+    } label: {
+      HStack(spacing: 7) {
+        Circle()
+          .fill(count > 0 ? color : PanelTheme.tertiary)
+          .frame(width: 8, height: 8)
+
+        Text("\(count) \(label)")
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(isActive ? PanelTheme.primary : PanelTheme.secondary)
+          .monospacedDigit()
+      }
+      .padding(.horizontal, 10)
+      .frame(minHeight: 44)
+      .background(
+        isActive ? PanelTheme.surface : Color.clear,
+        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+      )
+      .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(
+      targetFilter == .awaitingReply
+        ? "\(count) conversations awaiting your reply"
+        : "\(count) unread conversations"
+    )
+    .accessibilityValue(isActive ? "Selected" : "Not selected")
+    .accessibilityHint(isActive ? "Shows all recent conversations" : "Filters the message list")
+  }
+
   private var inbox: some View {
-    LazyVStack(spacing: 0) {
+    let conversations = model.filteredConversations(filter: filter)
+    return LazyVStack(spacing: 0) {
       if !model.hasLoadedInitialSnapshot {
         MessagesLoadingState(message: "Loading private messages…")
           .padding(.top, 24)
@@ -83,40 +146,66 @@ struct MessagesMobileView: View {
           JoiDottedDivider()
         }
 
-        JoiSectionHeader(title: "Last 14 days", count: model.visibleConversations.count)
+        if conversations.isEmpty {
+          filteredEmptyState
+        } else {
+          JoiSectionHeader(title: "Last 14 days", count: conversations.count)
 
-        ForEach(Array(model.visibleConversations.enumerated()), id: \.element.id) { index, conversation in
-          if let latestMessage = model.latestMessage(for: conversation.id) {
-            let unreadCount = model.unreadCount(for: conversation.id)
-            let isAwaitingReply = model.isAwaitingReply(conversation)
-            JoiDrawerButton(action: {
-              selectedConversation = MessageConversationRoute(id: conversation.id)
-            }) {
-              JoiMessageConversationRow(
-                conversation: conversation,
-                latestMessage: latestMessage,
-                unreadCount: unreadCount,
-                isAwaitingReply: isAwaitingReply
+          ForEach(Array(conversations.enumerated()), id: \.element.id) { index, conversation in
+            if let latestMessage = model.latestMessage(for: conversation.id) {
+              let unreadCount = model.unreadCount(for: conversation.id)
+              let isAwaitingReply = model.isAwaitingReply(conversation)
+              JoiDrawerButton(action: {
+                selectedConversation = MessageConversationRoute(id: conversation.id)
+              }) {
+                JoiMessageConversationRow(
+                  conversation: conversation,
+                  latestMessage: latestMessage,
+                  unreadCount: unreadCount,
+                  isAwaitingReply: isAwaitingReply
+                )
+              }
+              .buttonStyle(.plain)
+              .accessibilityElement(children: .ignore)
+              .accessibilityLabel(conversation.displayName)
+              .accessibilityValue(
+                "\(messageStatusAccessibility(unreadCount, isAwaitingReply: isAwaitingReply)). "
+                  + "\(messagePreview(latestMessage.body)). "
+                  + latestMessage.sentAt.formatted(date: .abbreviated, time: .shortened)
               )
-            }
-            .buttonStyle(.plain)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(conversation.displayName)
-            .accessibilityValue(
-              "\(messageStatusAccessibility(unreadCount, isAwaitingReply: isAwaitingReply)). "
-                + "\(messagePreview(latestMessage.body)). "
-                + latestMessage.sentAt.formatted(date: .abbreviated, time: .shortened)
-            )
-            .accessibilityHint("Opens recent message history")
+              .accessibilityHint("Opens recent message history")
 
-            if index < model.visibleConversations.count - 1 {
-              JoiDottedDivider(inset: 80)
+              if index < conversations.count - 1 {
+                JoiDottedDivider(inset: 80)
+              }
             }
           }
         }
       }
     }
     .padding(.bottom, 96)
+  }
+
+  @ViewBuilder
+  private var filteredEmptyState: some View {
+    switch filter {
+    case .all:
+      EmptyView()
+    case .awaitingReply:
+      EmptyPanelState(
+        symbol: "checkmark.bubble",
+        title: "No replies waiting",
+        detail: "Nothing from the last 14 days is waiting for your reply. Tap Awaiting again to show every conversation."
+      )
+      .padding(.top, 24)
+    case .unread:
+      EmptyPanelState(
+        symbol: "checkmark.message",
+        title: "No unread messages",
+        detail: "You're all caught up. Tap Unread again to show every conversation."
+      )
+      .padding(.top, 24)
+    }
   }
 
   @ViewBuilder
@@ -338,31 +427,97 @@ private struct JoiMessageConversationRow: View {
   }
 }
 
+enum MobileMessageAvatarTone: Equatable {
+  case group
+  case knownDirect
+  case unresolvedDirect
+}
+
+func mobileMessageAvatarTone(
+  for conversation: SyncedMessageConversation
+) -> MobileMessageAvatarTone {
+  if conversation.isGroup { return .group }
+
+  let genericNames = Set(["contact", "unknown", "unknown contact"])
+  let displayName = conversation.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+  if genericNames.contains(displayName.lowercased()) || messageNameIsRawIdentifier(displayName) {
+    return .unresolvedDirect
+  }
+
+  let hasUnresolvedParticipant = conversation.participants.contains { participant in
+    let name = participant.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    return participant.isContactNameResolved == false
+      || genericNames.contains(name.lowercased())
+      || messageNameIsRawIdentifier(name)
+  }
+  return hasUnresolvedParticipant ? .unresolvedDirect : .knownDirect
+}
+
+private func messageNameIsRawIdentifier(_ rawValue: String) -> Bool {
+  var value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !value.isEmpty, value.utf8.count <= 1_024 else { return false }
+  if let decoded = value.removingPercentEncoding { value = decoded }
+
+  let schemes = ["mailto:", "tel:", "sms:", "imessage:", "facetime:", "phone:", "email:"]
+  let chatPrefixes = ["imessage;-;", "sms;-;"]
+  for _ in 0..<2 {
+    let folded = value.lowercased()
+    if let prefix = chatPrefixes.first(where: { folded.hasPrefix($0) }) {
+      value.removeFirst(prefix.count)
+      continue
+    }
+    if let scheme = schemes.first(where: { folded.hasPrefix($0) }) {
+      value.removeFirst(scheme.count)
+      while value.hasPrefix("/") { value.removeFirst() }
+      continue
+    }
+    break
+  }
+
+  if let delimiter = value.firstIndex(where: { $0 == "?" || $0 == "#" || $0 == ";" }) {
+    value = String(value[..<delimiter])
+  }
+  value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+  if value.hasPrefix("<"), value.hasSuffix(">"), value.count > 2 {
+    value.removeFirst()
+    value.removeLast()
+  }
+
+  if value.contains("@") {
+    let components = value.split(separator: "@", omittingEmptySubsequences: false)
+    return components.count == 2 && !components[0].isEmpty && !components[1].isEmpty
+  }
+
+  var digits = value.compactMap(\.wholeNumberValue).map(String.init).joined()
+  if digits.hasPrefix("00") { digits.removeFirst(2) }
+  return (3...32).contains(digits.count)
+}
+
 struct JoiMessageAvatar: View {
   let displayName: String
-  let identity: String
+  let tone: MobileMessageAvatarTone
   let size: CGFloat
 
   init(conversation: SyncedMessageConversation, size: CGFloat) {
     displayName = conversation.displayName
-    identity = conversation.id
+    tone = mobileMessageAvatarTone(for: conversation)
     self.size = size
   }
 
-  init(displayName: String, identity: String, size: CGFloat) {
+  init(displayName: String, identity _: String, size: CGFloat) {
     self.displayName = displayName
-    self.identity = identity
+    tone = .knownDirect
     self.size = size
   }
 
   var body: some View {
     ZStack {
       Circle()
-        .fill(monogramColor)
+        .fill(avatarColor.opacity(0.22))
 
       Text(initials)
         .font(.system(size: size * 0.32, weight: .bold))
-        .foregroundStyle(PanelTheme.primary)
+        .foregroundStyle(avatarColor)
     }
     .frame(width: size, height: size)
     .overlay {
@@ -382,20 +537,15 @@ struct JoiMessageAvatar: View {
     return value.isEmpty ? "?" : value
   }
 
-  private var monogramColor: Color {
-    let palette = [
-      PanelTheme.blue,
-      PanelTheme.violet,
-      PanelTheme.green,
-      PanelTheme.amber,
-      PanelTheme.coral,
-    ]
-    var hash: UInt64 = 14_695_981_039_346_656_037
-    for byte in identity.utf8 {
-      hash ^= UInt64(byte)
-      hash &*= 1_099_511_628_211
+  private var avatarColor: Color {
+    switch tone {
+    case .group:
+      PanelTheme.green
+    case .knownDirect:
+      PanelTheme.blue
+    case .unresolvedDirect:
+      PanelTheme.amber
     }
-    return palette[Int(hash % UInt64(palette.count))].opacity(0.28)
   }
 }
 

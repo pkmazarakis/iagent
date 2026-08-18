@@ -76,7 +76,28 @@ final class MobileSettingsPresentationTests: XCTestCase {
     await model.start()
 
     XCTAssertEqual(model.visibleConversations.count, 3)
+    XCTAssertEqual(
+      model.visibleConversations.map(\.id),
+      [
+        "fixture-conversation-maya",
+        "fixture-conversation-group",
+        "fixture-conversation-alex",
+      ]
+    )
     XCTAssertEqual(model.unreadConversationCount, 2)
+    XCTAssertEqual(model.awaitingReplyConversationCount, 2)
+    XCTAssertEqual(
+      model.filteredConversations(filter: .all).map(\.id),
+      model.visibleConversations.map(\.id)
+    )
+    XCTAssertEqual(
+      model.filteredConversations(filter: .unread).map(\.id),
+      ["fixture-conversation-maya", "fixture-conversation-group"]
+    )
+    XCTAssertEqual(
+      model.filteredConversations(filter: .awaitingReply).map(\.id),
+      ["fixture-conversation-maya", "fixture-conversation-alex"]
+    )
     XCTAssertEqual(model.messages(for: "fixture-conversation-maya").count, 3)
     XCTAssertFalse(
       model.visibleConversations.contains { $0.id == "fixture-conversation-expired" }
@@ -106,9 +127,100 @@ final class MobileSettingsPresentationTests: XCTestCase {
 
     XCTAssertEqual(model.unreadCount(for: "fixture-conversation-maya"), 0)
     XCTAssertEqual(model.unreadConversationCount, 1)
+    XCTAssertEqual(model.awaitingReplyConversationCount, 2)
+    XCTAssertEqual(
+      model.visibleConversations.map(\.id),
+      [
+        "fixture-conversation-group",
+        "fixture-conversation-maya",
+        "fixture-conversation-alex",
+      ]
+    )
+    XCTAssertEqual(
+      model.filteredConversations(filter: .unread).map(\.id),
+      ["fixture-conversation-group"]
+    )
+    XCTAssertEqual(
+      model.filteredConversations(filter: .awaitingReply).map(\.id),
+      ["fixture-conversation-maya", "fixture-conversation-alex"]
+    )
     XCTAssertTrue(model.isAwaitingReply(maya))
     XCTAssertTrue(model.homeUnreadMessageSummary().contactItems.isEmpty)
     XCTAssertEqual(model.homeUnreadMessageSummary().remainingUnreadMessageCount, 2)
+  }
+
+  func testMobileMessageFilterTogglesSelectionBackToAll() {
+    XCTAssertEqual(MobileMessageInboxFilter.all.toggled(with: .unread), .unread)
+    XCTAssertEqual(MobileMessageInboxFilter.unread.toggled(with: .unread), .all)
+    XCTAssertEqual(
+      MobileMessageInboxFilter.unread.toggled(with: .awaitingReply),
+      .awaitingReply
+    )
+    XCTAssertEqual(
+      MobileMessageInboxFilter.awaitingReply.toggled(with: .awaitingReply),
+      .all
+    )
+  }
+
+  func testMobileMessageAvatarToneSeparatesKnownUnknownAndGroupConversations() {
+    func conversation(
+      displayName: String,
+      participants: [SyncedMessageParticipant] = [],
+      isGroup: Bool = false
+    ) -> SyncedMessageConversation {
+      SyncedMessageConversation(
+        id: "conversation-\(displayName)-\(isGroup)",
+        displayName: displayName,
+        participants: participants,
+        isGroup: isGroup,
+        latestMessageID: "message",
+        latestMessageDate: .now,
+        latestPreview: "Preview",
+        updatedAt: .now
+      )
+    }
+
+    let knownContact = SyncedMessageParticipant(
+      id: "known",
+      displayName: "Avery Chen",
+      isContactNameResolved: true
+    )
+    let unknownContact = SyncedMessageParticipant(
+      id: "unknown",
+      displayName: "+15551234567",
+      isContactNameResolved: false
+    )
+
+    XCTAssertEqual(
+      mobileMessageAvatarTone(
+        for: conversation(
+          displayName: "Weekend crew",
+          participants: [knownContact, unknownContact],
+          isGroup: true
+        )
+      ),
+      .group
+    )
+    XCTAssertEqual(
+      mobileMessageAvatarTone(
+        for: conversation(displayName: "Avery Chen", participants: [knownContact])
+      ),
+      .knownDirect
+    )
+    XCTAssertEqual(
+      mobileMessageAvatarTone(
+        for: conversation(displayName: "+15551234567", participants: [unknownContact])
+      ),
+      .unresolvedDirect
+    )
+    XCTAssertEqual(
+      mobileMessageAvatarTone(for: conversation(displayName: "unknown@example.com")),
+      .unresolvedDirect
+    )
+    XCTAssertEqual(
+      mobileMessageAvatarTone(for: conversation(displayName: "Unknown Contact")),
+      .unresolvedDirect
+    )
   }
 
   @MainActor
@@ -155,6 +267,58 @@ final class MobileSettingsPresentationTests: XCTestCase {
     conversation.participants[0].isContactNameResolved = true
     conversation.isGroup = true
     XCTAssertNil(model.homeContactParticipant(for: conversation, latestUnreadMessage: message))
+  }
+}
+
+@MainActor
+final class MobileNoteTitleIndependenceTests: XCTestCase {
+  func testVoiceStyleMentionBodySavesAndRestoresWithoutBecomingTitle() async {
+    let model = MobileAppModel()
+    let body = "@Ada capture this exactly as dictated."
+
+    let saved = await model.saveNote(title: "", body: body)
+    let restored = model.note(id: saved.id)
+
+    XCTAssertEqual(saved.title, "Untitled note")
+    XCTAssertEqual(saved.body, body)
+    XCTAssertEqual(restored?.title, "Untitled note")
+    XCTAssertEqual(restored?.body, body)
+    XCTAssertFalse(restored?.title.contains("@") == true)
+
+    await model.deleteNote(restored ?? saved)
+  }
+
+  func testMeetingSummaryChangesBodyWithoutRewritingExplicitTitle() async {
+    let model = MobileAppModel()
+    let title = "Weekly product sync"
+    let originalBody = MeetingNoteContent(
+      transcript: "@Maya opened the discussion."
+    ).markdown
+    let saved = await model.saveNote(
+      title: title,
+      body: originalBody,
+      kind: .meeting
+    )
+
+    let didSaveSummary = await model.saveMeetingSummary(
+      noteID: saved.id,
+      summary: "Ship the reviewed plan on Friday.",
+      expectedBody: originalBody
+    )
+    let restored = model.note(id: saved.id)
+
+    XCTAssertTrue(didSaveSummary)
+    XCTAssertEqual(restored?.title, title)
+    XCTAssertEqual(
+      restored.map { MeetingNoteContent(markdown: $0.body).transcript },
+      "@Maya opened the discussion."
+    )
+    XCTAssertEqual(
+      restored.flatMap { MeetingNoteContent(markdown: $0.body).summary },
+      "Ship the reviewed plan on Friday."
+    )
+
+    await model.deleteNote(restored ?? saved)
   }
 }
 

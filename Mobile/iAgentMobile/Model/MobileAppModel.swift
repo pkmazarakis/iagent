@@ -83,6 +83,22 @@ struct MobileHomeUnreadMessageSummary: Equatable {
   let remainingUnreadMessageCount: Int
 }
 
+enum MobileMessageInboxFilter: String, CaseIterable, Equatable, Sendable {
+  case all
+  case awaitingReply
+  case unread
+
+  func toggled(with target: Self) -> Self {
+    self == target ? .all : target
+  }
+}
+
+private struct MobileMessageInboxProjection {
+  let conversations: [SyncedMessageConversation]
+  let unreadConversationIDs: Set<String>
+  let awaitingReplyConversationIDs: Set<String>
+}
+
 @MainActor
 final class MobileAppModel: ObservableObject {
   enum Tab: Hashable {
@@ -100,6 +116,7 @@ final class MobileAppModel: ObservableObject {
   @Published var isCalendarPresented = false
   @Published var isSettingsPresented = false
   @Published var isMessagesPresented = false
+  @Published var calendarEventToPresentID: String?
   @Published var selectedCalendarDate = Calendar.autoupdatingCurrent.startOfDay(for: Date())
   @Published var isNoteEditorPresented = false
   @Published var messageConversationToPresent: String?
@@ -134,7 +151,6 @@ final class MobileAppModel: ObservableObject {
   private var storeChangesTask: Task<Void, Never>?
   private var statusChangesTask: Task<Void, Never>?
   private var todoCompletionTasks: [UUID: Task<Void, Never>] = [:]
-  private var meetingTitleGenerationTasks: [UUID: Task<Void, Never>] = [:]
   private var recordingStartedAt: Date?
   private var meetingSummaryAnimationIDs = Set<UUID>()
   private var automaticMeetingSummaryIDs = Set<UUID>()
@@ -242,7 +258,6 @@ final class MobileAppModel: ObservableObject {
     storeChangesTask?.cancel()
     statusChangesTask?.cancel()
     todoCompletionTasks.values.forEach { $0.cancel() }
-    meetingTitleGenerationTasks.values.forEach { $0.cancel() }
   }
 
   var firstName: String? {
@@ -400,13 +415,11 @@ final class MobileAppModel: ObservableObject {
   }
 
   var unreadConversationCount: Int {
-    let referenceDate = Date()
-    return visibleConversations(referenceDate: referenceDate).reduce(into: 0) {
-      count, conversation in
-      if unreadCount(for: conversation.id, referenceDate: referenceDate) > 0 {
-        count += 1
-      }
-    }
+    messageInboxProjection(referenceDate: Date()).unreadConversationIDs.count
+  }
+
+  var awaitingReplyConversationCount: Int {
+    messageInboxProjection(referenceDate: Date()).awaitingReplyConversationIDs.count
   }
 
   var latestMessageRelayState: SyncedMessageRelayState? {
@@ -418,21 +431,24 @@ final class MobileAppModel: ObservableObject {
   }
 
   func visibleConversations(referenceDate: Date) -> [SyncedMessageConversation] {
-    let messagesByConversation = Dictionary(
-      grouping: eligibleMessages(referenceDate: referenceDate),
-      by: \.conversationID
-    )
-    return snapshot.messageConversations
-      .filter {
-        $0.deletedAt == nil && !(messagesByConversation[$0.id]?.isEmpty ?? true)
+    messageInboxProjection(referenceDate: referenceDate).conversations
+  }
+
+  func filteredConversations(
+    filter: MobileMessageInboxFilter,
+    referenceDate: Date = Date()
+  ) -> [SyncedMessageConversation] {
+    let projection = messageInboxProjection(referenceDate: referenceDate)
+    return projection.conversations.filter { conversation in
+      switch filter {
+      case .all:
+        true
+      case .awaitingReply:
+        projection.awaitingReplyConversationIDs.contains(conversation.id)
+      case .unread:
+        projection.unreadConversationIDs.contains(conversation.id)
       }
-      .sorted { left, right in
-        let leftDate = messagesByConversation[left.id]?.last?.sentAt ?? .distantPast
-        let rightDate = messagesByConversation[right.id]?.last?.sentAt ?? .distantPast
-        if leftDate != rightDate { return leftDate > rightDate }
-        return left.displayName.localizedCaseInsensitiveCompare(right.displayName)
-          == .orderedAscending
-      }
+    }
   }
 
   func messages(
@@ -619,6 +635,19 @@ final class MobileAppModel: ObservableObject {
     _ = await save(.messageReadState(state))
   }
 
+  /// One catalog powers every mobile authoring surface. Include EventKit
+  /// results immediately instead of waiting for their next sync round trip.
+  var artifactMentions: [ArtifactMention] {
+    let now = Date()
+    let calendar = Calendar.autoupdatingCurrent
+    let start = calendar.date(byAdding: .day, value: -30, to: now) ?? now
+    let end = calendar.date(byAdding: .day, value: 90, to: now) ?? now
+    return ArtifactMentionCatalog.make(
+      snapshot: snapshot,
+      calendarEvents: self.calendar.permittedEvents(from: start, to: end)
+    )
+  }
+
   func todo(id: UUID) -> SyncedTodo? {
     snapshot.todos.first { $0.id == id && $0.deletedAt == nil }
   }
@@ -633,9 +662,18 @@ final class MobileAppModel: ObservableObject {
 
   func calendarEvent(id: String?) -> SyncedCalendarEvent? {
     guard let id else { return nil }
-    return (snapshot.calendarEvents + calendar.events).first {
-      $0.id == id || $0.sourceIdentifier == id
-    }
+    return activeCalendarEvent(
+      matching: id,
+      in: snapshot.calendarEvents + calendar.events
+    )
+  }
+
+  private func activeCalendarEvent(
+    matching id: String,
+    in candidates: [SyncedCalendarEvent]
+  ) -> SyncedCalendarEvent? {
+    candidates.first { $0.deletedAt == nil && $0.id == id }
+      ?? candidates.first { $0.deletedAt == nil && $0.sourceIdentifier == id }
   }
 
   func calendarEvents(on date: Date) -> [SyncedCalendarEvent] {
@@ -896,11 +934,6 @@ final class MobileAppModel: ObservableObject {
     body: String,
     kind: SyncedNoteKind = .note
   ) async -> SyncedNote {
-    if let id {
-      // Explicit editing always wins over an opportunistic generated meeting title.
-      meetingTitleGenerationTasks[id]?.cancel()
-      meetingTitleGenerationTasks[id] = nil
-    }
     let existing = id.flatMap { noteID in snapshot.notes.first(where: { $0.id == noteID }) }
     let now = Date()
     let note = SyncedNote(
@@ -913,13 +946,19 @@ final class MobileAppModel: ObservableObject {
       sourceDeviceID: existing?.sourceDeviceID ?? UIDevice.current.identifierForVendor?.uuidString ?? "iphone",
       relativeFilePath: existing?.relativeFilePath
     )
-    await save(.note(note))
+    var payloads: [IAgentSyncPayload] = [.note(note)]
+    if kind == .meeting, var meeting = meetingSession(for: note.id) {
+      // The linked meeting index follows only the explicit title field. Body and summary edits
+      // never participate in title selection.
+      meeting.title = note.title
+      meeting.updatedAt = now
+      payloads.append(.meetingSession(meeting))
+    }
+    await save(payloads)
     return note
   }
 
   func deleteNote(_ note: SyncedNote) async {
-    meetingTitleGenerationTasks[note.id]?.cancel()
-    meetingTitleGenerationTasks[note.id] = nil
     let payloads = IAgentSyncPayload.cascadingNoteDeletion(
       note: note,
       linkedMeetings: snapshot.meetings,
@@ -945,11 +984,6 @@ final class MobileAppModel: ObservableObject {
     summary: String,
     expectedBody: String? = nil
   ) async -> Bool {
-    // Serialize the two independent on-device model enrichments so both the generated
-    // title and summary are retained in the single synced note record.
-    if let titleTask = meetingTitleGenerationTasks[noteID] {
-      await titleTask.value
-    }
     guard var note = note(id: noteID), note.kind == .meeting else { return false }
     if let expectedBody, note.body != expectedBody { return false }
     let now = Date()
@@ -1051,11 +1085,6 @@ final class MobileAppModel: ObservableObject {
       recorder.reset()
       isRecorderPresented = false
 
-      scheduleMeetingTitleGeneration(
-        noteID: note.id,
-        expectedTitle: note.title,
-        transcript: formattedTranscript
-      )
       if fixtureMigrationBlockMessage == nil {
         await cloud?.pushLocalChanges()
       }
@@ -1103,70 +1132,6 @@ final class MobileAppModel: ObservableObject {
   /// unexpectedly start a model request.
   func consumeAutomaticMeetingSummary(for noteID: UUID) -> Bool {
     automaticMeetingSummaryIDs.remove(noteID) != nil
-  }
-
-  private func scheduleMeetingTitleGeneration(
-    noteID: UUID,
-    expectedTitle: String,
-    transcript: String
-  ) {
-    guard meetingTitleGenerationTasks[noteID] == nil,
-          MeetingTitleGenerator.isAvailable
-    else { return }
-
-    meetingTitleGenerationTasks[noteID] = Task { @MainActor [weak self] in
-      let generatedTitle = await MeetingTitleGenerator.generateTitle(from: transcript)
-      guard !Task.isCancelled, let self else { return }
-      defer { self.meetingTitleGenerationTasks[noteID] = nil }
-      guard let generatedTitle else { return }
-      await self.persistGeneratedMeetingTitle(
-        generatedTitle,
-        noteID: noteID,
-        expectedTitle: expectedTitle,
-        expectedTranscript: transcript
-      )
-    }
-  }
-
-  private func persistGeneratedMeetingTitle(
-    _ generatedTitle: String,
-    noteID: UUID,
-    expectedTitle: String,
-    expectedTranscript: String
-  ) async {
-    guard var note = note(id: noteID),
-          note.kind == .meeting,
-          note.title == expectedTitle,
-          MeetingNoteContent(markdown: note.body).transcript
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            == expectedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-    else { return }
-
-    let now = Date()
-    note.title = generatedTitle
-    note.updatedAt = now
-    var payloads: [IAgentSyncPayload] = [.note(note)]
-
-    if var meeting = meetingSession(for: noteID) {
-      // A title edited elsewhere wins. Only keep the linked session in lockstep while it
-      // still carries the exact deterministic title captured at recording completion.
-      guard meeting.title == expectedTitle else { return }
-      meeting.title = generatedTitle
-      meeting.updatedAt = now
-      payloads.append(.meetingSession(meeting))
-    }
-
-    do {
-      try await localStore.upsertLocal(payloads)
-      await reload()
-      if fixtureMigrationBlockMessage == nil {
-        await cloud?.pushLocalChanges()
-      }
-      await reloadStatus()
-    } catch {
-      // Title generation is opportunistic. Keep the already-persisted deterministic title
-      // and avoid replacing the recorder/sync status with a nonessential model failure.
-    }
   }
 
   private func calendarEventsMatch(
@@ -1222,8 +1187,13 @@ final class MobileAppModel: ObservableObject {
 
   @discardableResult
   private func save(_ payload: IAgentSyncPayload) async -> Bool {
+    await save([payload])
+  }
+
+  @discardableResult
+  private func save(_ payloads: [IAgentSyncPayload]) async -> Bool {
     do {
-      try await localStore.upsertLocal(payload)
+      try await localStore.upsertLocal(payloads)
       await reload()
       if fixtureMigrationBlockMessage == nil {
         await cloud?.pushLocalChanges()
@@ -1248,6 +1218,78 @@ final class MobileAppModel: ObservableObject {
     }
     await reloadStatus()
     resolvePendingDeepLink()
+  }
+
+  private func messageInboxProjection(
+    referenceDate: Date
+  ) -> MobileMessageInboxProjection {
+    let eligible = eligibleMessages(referenceDate: referenceDate)
+    let messagesByConversation = Dictionary(grouping: eligible, by: \.conversationID)
+    let messageByID = eligible.reduce(into: [String: SyncedMessage]()) { index, message in
+      index[message.id] = message
+    }
+
+    var readCursorByConversation: [String: (date: Date, messageID: String)] = [:]
+    for state in snapshot.messageReadStates where state.deletedAt == nil {
+      let candidate = (
+        date: state.readThroughDate ?? .distantPast,
+        messageID: state.readThroughMessageID ?? ""
+      )
+      let current = readCursorByConversation[state.id] ?? (.distantPast, "")
+      if candidate.date > current.date
+        || candidate.date == current.date && candidate.messageID > current.messageID
+      {
+        readCursorByConversation[state.id] = candidate
+      }
+    }
+
+    let conversations = snapshot.messageConversations.filter {
+      $0.deletedAt == nil && !(messagesByConversation[$0.id]?.isEmpty ?? true)
+    }
+    var unreadConversationIDs = Set<String>()
+    var awaitingReplyConversationIDs = Set<String>()
+
+    for conversation in conversations {
+      let cursor = readCursorByConversation[conversation.id] ?? (.distantPast, "")
+      let hasUnread = messagesByConversation[conversation.id, default: []].contains { message in
+        guard !message.isFromMe, message.sourceReadAt == nil else { return false }
+        return message.sentAt > cursor.date
+          || message.sentAt == cursor.date && message.id > cursor.messageID
+      }
+      if hasUnread { unreadConversationIDs.insert(conversation.id) }
+
+      if !conversation.isGroup,
+         let awaitingReplyMessageID = conversation.awaitingReplyMessageID,
+         let message = messageByID[awaitingReplyMessageID],
+         message.conversationID == conversation.id,
+         !message.isFromMe
+      {
+        awaitingReplyConversationIDs.insert(conversation.id)
+      }
+    }
+
+    let orderedConversations = conversations.sorted { left, right in
+      func priority(_ conversationID: String) -> Int {
+        if unreadConversationIDs.contains(conversationID) { return 0 }
+        if awaitingReplyConversationIDs.contains(conversationID) { return 1 }
+        return 2
+      }
+
+      let leftPriority = priority(left.id)
+      let rightPriority = priority(right.id)
+      if leftPriority != rightPriority { return leftPriority < rightPriority }
+
+      let leftDate = messagesByConversation[left.id]?.last?.sentAt ?? .distantPast
+      let rightDate = messagesByConversation[right.id]?.last?.sentAt ?? .distantPast
+      if leftDate != rightDate { return leftDate > rightDate }
+      return left.id > right.id
+    }
+
+    return MobileMessageInboxProjection(
+      conversations: orderedConversations,
+      unreadConversationIDs: unreadConversationIDs,
+      awaitingReplyConversationIDs: awaitingReplyConversationIDs
+    )
   }
 
   private func eligibleMessages(referenceDate: Date) -> [SyncedMessage] {
@@ -1398,10 +1440,37 @@ final class MobileAppModel: ObservableObject {
         return
       }
       deepLinkDestination = .note(note)
+    case .notePath(let path):
+      selectedTab = .notes
+      guard let note = snapshot.notes.first(where: {
+        $0.deletedAt == nil && $0.relativeFilePath == path
+      }) else {
+        navigationNotice = "This note is no longer available."
+        return
+      }
+      deepLinkDestination = .note(note)
     case .calendar:
       selectedTab = .today
       selectedCalendarDate = Calendar.autoupdatingCurrent.startOfDay(for: Date())
       calendar.refresh(referenceDate: selectedCalendarDate)
+      calendarEventToPresentID = nil
+      isCalendarPresented = true
+    case .calendarEvent(let id):
+      let systemCalendar = Calendar.autoupdatingCurrent
+      let now = Date()
+      let rangeStart = systemCalendar.date(byAdding: .day, value: -30, to: now) ?? now
+      let rangeEnd = systemCalendar.date(byAdding: .day, value: 90, to: now) ?? now
+      let candidates = snapshot.calendarEvents
+        + calendar.events
+        + calendar.permittedEvents(from: rangeStart, to: rangeEnd)
+      guard let event = activeCalendarEvent(matching: id, in: candidates) else {
+        navigationNotice = "This calendar event is no longer available."
+        return
+      }
+      selectedTab = .today
+      selectedCalendarDate = systemCalendar.startOfDay(for: event.startDate)
+      calendar.refresh(referenceDate: selectedCalendarDate)
+      calendarEventToPresentID = event.id
       isCalendarPresented = true
     case .meetingReady:
       presentRecorder(automaticallyStarts: false)

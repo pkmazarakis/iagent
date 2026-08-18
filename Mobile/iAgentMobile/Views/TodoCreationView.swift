@@ -11,6 +11,8 @@ struct TodoCreationView: View {
 
   @State private var title = ""
   @State private var notes = ""
+  @State private var titleMentionSelectionID: String?
+  @State private var notesMentionSelectionID: String?
   @State private var selectedCalendar: String?
   @State private var selectedDate = Date()
   @State private var selectedTime = Date.roundedUpToFiveMinutes()
@@ -43,18 +45,31 @@ struct TodoCreationView: View {
           .padding(.top, 23)
 
         VStack(alignment: .leading, spacing: 13) {
-          TextField("Todo title", text: $title)
-            .focused($isTitleFocused)
-            .defaultFocus($isTitleFocused, todoID == nil)
-            .font(.system(size: 34, weight: .bold))
-            .foregroundStyle(PanelTheme.primary)
-            .tint(PanelTheme.coral)
-            .textInputAutocapitalization(.sentences)
-            .lineLimit(1)
-            .submitLabel(.next)
-            .onSubmit(focusDetailsEditor)
-            .accessibilityIdentifier(todoID == nil ? "todo-composer-title" : "todo-detail-title")
-            .accessibilityHint("Press Return to move to Write something")
+          ArtifactMentionAttachedField(
+            text: $title,
+            mentions: model.artifactMentions,
+            writesMarkdown: false,
+            isActive: isTitleFocused,
+            selectedMentionID: $titleMentionSelectionID
+          ) {
+            TextField("Todo title", text: $title)
+              .focused($isTitleFocused)
+              .defaultFocus($isTitleFocused, todoID == nil)
+              .font(.system(size: 34, weight: .bold))
+              .foregroundStyle(PanelTheme.primary)
+              .tint(PanelTheme.coral)
+              .textInputAutocapitalization(.sentences)
+              .lineLimit(1)
+              .submitLabel(.next)
+              .onSubmit(focusDetailsEditor)
+              .onKeyPress(.upArrow) { handleTitleMentionKey(.previous) }
+              .onKeyPress(.downArrow) { handleTitleMentionKey(.next) }
+              .onKeyPress(.return) { handleTitleMentionKey(.select) }
+              .accessibilityIdentifier(
+                todoID == nil ? "todo-composer-title" : "todo-detail-title"
+              )
+              .accessibilityHint("Press Return to move to Write something")
+          }
 
           if let todoID, let todo = model.todo(id: todoID) {
             editingMetadata(for: todo)
@@ -75,7 +90,21 @@ struct TodoCreationView: View {
               activeCommands: $activeMarkdownCommands,
               accessibilityIdentifier: todoID == nil
                 ? "todo-composer-editor"
-                : "todo-detail-markdown-editor"
+                : "todo-detail-markdown-editor",
+              openURL: model.handleDeepLink,
+              handlesArtifactMentionKeys: isBodyFocused
+                && ArtifactMentionQuery(input: notes) != nil,
+              onArtifactMentionKey: handleNotesMentionKey
+            )
+          }
+          .safeAreaInset(edge: .bottom, spacing: 8) {
+            ArtifactMentionSuggestions(
+              text: $notes,
+              mentions: model.artifactMentions,
+              writesMarkdown: true,
+              anchor: .above,
+              isActive: isBodyFocused,
+              selectedMentionID: $notesMentionSelectionID
             )
           }
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -409,6 +438,28 @@ struct TodoCreationView: View {
     withAnimation(metadataSheetAnimation) {
       activeSheet = sheet
     }
+  }
+
+  private func handleTitleMentionKey(
+    _ command: ArtifactMentionKeyCommand
+  ) -> KeyPress.Result {
+    handleArtifactMentionKeyCommand(
+      command,
+      text: $title,
+      mentions: model.artifactMentions,
+      writesMarkdown: false,
+      selectedMentionID: $titleMentionSelectionID
+    ) ? .handled : .ignored
+  }
+
+  private func handleNotesMentionKey(_ command: ArtifactMentionKeyCommand) -> Bool {
+    handleArtifactMentionKeyCommand(
+      command,
+      text: $notes,
+      mentions: model.artifactMentions,
+      writesMarkdown: true,
+      selectedMentionID: $notesMentionSelectionID
+    )
   }
 
   private func focusDetailsEditor() {
@@ -1195,7 +1246,7 @@ private enum TodoMarkdownBlock: String {
 @MainActor
 private enum TodoMarkdownCodec {
   private static let inlineExpression = try! NSRegularExpression(
-    pattern: #"\*\*\*([^*]+)\*\*\*|\*\*([^*]+)\*\*|_([^_]+)_|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\)"#
+    pattern: #"\*\*\*([^*]+)\*\*\*|\*\*([^*]+)\*\*|_([^_]+)_|`([^`]+)`|\[((?:\\[\s\S]|[^\]])+)\]\(([^)]+)\)"#
   )
 
   static var baseAttributes: [NSAttributedString.Key: Any] {
@@ -1307,7 +1358,7 @@ private enum TodoMarkdownCodec {
     from semanticAttributes: [NSAttributedString.Key: Any]
   ) -> [NSAttributedString.Key: Any] {
     var result = semanticAttributes
-    [.font, .foregroundColor, .backgroundColor, .underlineStyle, .paragraphStyle].forEach {
+    [.font, .foregroundColor, .backgroundColor, .underlineStyle, .paragraphStyle, .link].forEach {
       result.removeValue(forKey: $0)
     }
 
@@ -1332,9 +1383,15 @@ private enum TodoMarkdownCodec {
 
     var foreground = UIColor(white: 1, alpha: 0.96)
     if block == .quote { foreground = UIColor(white: 1, alpha: 0.58) }
-    if semanticAttributes[.todoLink] != nil {
+    if let destination = semanticAttributes[.todoLink] as? String {
       foreground = UIColor(red: 0.16, green: 0.62, blue: 1, alpha: 1)
-      result[.underlineStyle] = NSUnderlineStyle.single.rawValue
+      if let url = URL(string: destination), url.scheme?.lowercased() == "iagent" {
+        result[.link] = url
+        result[.backgroundColor] = UIColor(red: 0.16, green: 0.62, blue: 1, alpha: 0.18)
+        result[.underlineStyle] = 0
+      } else {
+        result[.underlineStyle] = NSUnderlineStyle.single.rawValue
+      }
     }
     if isGeneratedPrefix {
       foreground = block == .quote
@@ -1429,9 +1486,10 @@ private enum TodoMarkdownCodec {
         attributes[.todoLink] = sourceString.substring(with: match.range(at: 6))
       }
 
+      let content = sourceString.substring(with: contentRange)
       result.append(
         NSAttributedString(
-          string: sourceString.substring(with: contentRange),
+          string: attributes[.todoLink] == nil ? content : unescapedMarkdownLinkLabel(content),
           attributes: attributes
         )
       )
@@ -1458,7 +1516,7 @@ private enum TodoMarkdownCodec {
       let isItalic = attributes[.todoItalic] != nil
 
       if let url = attributes[.todoLink] as? String {
-        result += "[\(content)](\(url))"
+        result += "[\(escapedMarkdownLinkLabel(content))](\(url))"
       } else if attributes[.todoCode] != nil {
         result += "`\(content)`"
       } else if isBold, isItalic {
@@ -1473,6 +1531,133 @@ private enum TodoMarkdownCodec {
     }
     return result
   }
+
+  private static func unescapedMarkdownLinkLabel(_ value: String) -> String {
+    var result = ""
+    var isEscaped = false
+    for character in value {
+      if isEscaped {
+        if "\\[]*_`~".contains(character) {
+          result.append(character)
+        } else {
+          result.append("\\")
+          result.append(character)
+        }
+        isEscaped = false
+      } else if character == "\\" {
+        isEscaped = true
+      } else {
+        result.append(character)
+      }
+    }
+    if isEscaped { result.append("\\") }
+    return result
+  }
+
+  private static func escapedMarkdownLinkLabel(_ value: String) -> String {
+    value
+      .replacingOccurrences(of: "\\", with: "\\\\")
+      .replacingOccurrences(of: "[", with: "\\[")
+      .replacingOccurrences(of: "]", with: "\\]")
+      .replacingOccurrences(of: "*", with: "\\*")
+      .replacingOccurrences(of: "_", with: "\\_")
+      .replacingOccurrences(of: "`", with: "\\`")
+      .replacingOccurrences(of: "~", with: "\\~")
+      .replacingOccurrences(of: "\r\n", with: " ")
+      .replacingOccurrences(of: "\n", with: " ")
+      .replacingOccurrences(of: "\r", with: " ")
+  }
+}
+
+enum ArtifactMentionKeyCommand: Equatable {
+  case previous
+  case next
+  case select
+}
+
+@MainActor
+@discardableResult
+func handleArtifactMentionKeyCommand(
+  _ command: ArtifactMentionKeyCommand,
+  text: Binding<String>,
+  mentions: [ArtifactMention],
+  writesMarkdown: Bool,
+  selectedMentionID: Binding<String?>
+) -> Bool {
+  guard let query = ArtifactMentionQuery(input: text.wrappedValue) else { return false }
+  let items = ArtifactMentionCatalog.sections(
+    matching: query.text,
+    in: mentions,
+    itemsPerSection: 3
+  ).flatMap(\.items)
+
+  switch command {
+  case .previous, .next:
+    guard !items.isEmpty else {
+      selectedMentionID.wrappedValue = nil
+      return true
+    }
+    let delta = command == .next ? 1 : -1
+    let current = selectedMentionID.wrappedValue.flatMap { id in
+      items.firstIndex(where: { $0.id == id })
+    } ?? (delta > 0 ? -1 : items.count)
+    let next = max(0, min(items.count - 1, current + delta))
+    selectedMentionID.wrappedValue = items[next].id
+    return true
+
+  case .select:
+    guard let mention = selectedMentionID.wrappedValue.flatMap({ id in
+      items.first(where: { $0.id == id })
+    }) ?? items.first else { return true }
+    var updated = text.wrappedValue
+    query.replacing(in: &updated, with: mention, markdown: writesMarkdown)
+    if !updated.hasSuffix(" ") { updated.append(" ") }
+    text.wrappedValue = updated
+    selectedMentionID.wrappedValue = nil
+    return true
+  }
+}
+
+final class ArtifactMentionKeyCommandTextView: UITextView {
+  var artifactMentionKeyHandler: ((ArtifactMentionKeyCommand) -> Bool)?
+  var handlesArtifactMentionKeys = false {
+    didSet {
+      guard handlesArtifactMentionKeys != oldValue else { return }
+      // UIKit queries `keyCommands` again as this responder receives the next
+      // hardware-key event. There is no `setNeedsUpdateOfKeyCommands` API on
+      // UITextView/iOS, so avoid a nonexistent invalidation call here.
+    }
+  }
+
+  override var keyCommands: [UIKeyCommand]? {
+    var commands = super.keyCommands ?? []
+    guard handlesArtifactMentionKeys else { return commands }
+    commands.append(mentionKeyCommand(input: UIKeyCommand.inputUpArrow))
+    commands.append(mentionKeyCommand(input: UIKeyCommand.inputDownArrow))
+    commands.append(mentionKeyCommand(input: "\r"))
+    return commands
+  }
+
+  private func mentionKeyCommand(input: String) -> UIKeyCommand {
+    let command = UIKeyCommand(
+      input: input,
+      modifierFlags: [],
+      action: #selector(handleMentionKeyCommand(_:))
+    )
+    command.wantsPriorityOverSystemBehavior = true
+    return command
+  }
+
+  @objc private func handleMentionKeyCommand(_ sender: UIKeyCommand) {
+    let command: ArtifactMentionKeyCommand
+    switch sender.input {
+    case UIKeyCommand.inputUpArrow: command = .previous
+    case UIKeyCommand.inputDownArrow: command = .next
+    case "\r": command = .select
+    default: return
+    }
+    _ = artifactMentionKeyHandler?(command)
+  }
 }
 
 struct TodoMarkdownTextView: UIViewRepresentable {
@@ -1481,13 +1666,16 @@ struct TodoMarkdownTextView: UIViewRepresentable {
   let request: TodoMarkdownRequest?
   @Binding var activeCommands: Set<TodoMarkdownCommand>
   let accessibilityIdentifier: String
+  let openURL: (URL) -> Void
+  let handlesArtifactMentionKeys: Bool
+  let onArtifactMentionKey: (ArtifactMentionKeyCommand) -> Bool
 
   func makeCoordinator() -> Coordinator {
     Coordinator(parent: self)
   }
 
-  func makeUIView(context: Context) -> UITextView {
-    let textView = UITextView()
+  func makeUIView(context: Context) -> ArtifactMentionKeyCommandTextView {
+    let textView = ArtifactMentionKeyCommandTextView()
     textView.delegate = context.coordinator
     textView.backgroundColor = .clear
     textView.tintColor = UIColor(PanelTheme.coral)
@@ -1500,12 +1688,20 @@ struct TodoMarkdownTextView: UIViewRepresentable {
     textView.smartDashesType = .yes
     textView.adjustsFontForContentSizeCategory = true
     textView.accessibilityIdentifier = accessibilityIdentifier
+    textView.handlesArtifactMentionKeys = handlesArtifactMentionKeys
+    textView.artifactMentionKeyHandler = { [weak coordinator = context.coordinator] command in
+      coordinator?.parent.onArtifactMentionKey(command) ?? false
+    }
     context.coordinator.install(text, in: textView)
     return textView
   }
 
-  func updateUIView(_ textView: UITextView, context: Context) {
+  func updateUIView(_ textView: ArtifactMentionKeyCommandTextView, context: Context) {
     context.coordinator.parent = self
+    textView.handlesArtifactMentionKeys = handlesArtifactMentionKeys
+    textView.artifactMentionKeyHandler = { [weak coordinator = context.coordinator] command in
+      coordinator?.parent.onArtifactMentionKey(command) ?? false
+    }
 
     if text != context.coordinator.lastEmittedMarkdown,
        textView.markedTextRange == nil
@@ -1543,9 +1739,13 @@ struct TodoMarkdownTextView: UIViewRepresentable {
       preservedTypingSelection = nil
       preservedTypingAttributes = nil
       let selection = textView.selectedRange
+      let movesCaretToEnd = selection.length == 0
+        && selection.location >= textView.textStorage.length
       textView.attributedText = TodoMarkdownCodec.decode(markdown)
       textView.selectedRange = NSRange(
-        location: min(selection.location, textView.textStorage.length),
+        location: movesCaretToEnd
+          ? textView.textStorage.length
+          : min(selection.location, textView.textStorage.length),
         length: 0
       )
       textView.typingAttributes = TodoMarkdownCodec.baseAttributes
@@ -1581,6 +1781,17 @@ struct TodoMarkdownTextView: UIViewRepresentable {
       parent.isFocused = false
       emitMarkdown(from: textView)
       publishActiveCommands(from: textView)
+    }
+
+    func textView(
+      _ textView: UITextView,
+      shouldInteractWith URL: URL,
+      in characterRange: NSRange,
+      interaction: UITextItemInteraction
+    ) -> Bool {
+      guard URL.scheme?.lowercased() == "iagent" else { return true }
+      parent.openURL(URL)
+      return false
     }
 
     func apply(_ command: TodoMarkdownCommand, to textView: UITextView) {
@@ -1905,5 +2116,603 @@ private extension Date {
   static func roundedUpToFiveMinutes(from date: Date = Date()) -> Date {
     let interval: TimeInterval = 5 * 60
     return Date(timeIntervalSince1970: ceil(date.timeIntervalSince1970 / interval) * interval)
+  }
+}
+
+enum ArtifactMentionSuggestionAnchor: Equatable {
+  case above
+  case below
+
+  fileprivate var transitionEdge: Edge {
+    switch self {
+    case .above: .bottom
+    case .below: .top
+    }
+  }
+}
+
+private enum MobileArtifactMentionPickerGeometry {
+  static let surfaceMaxWidth: CGFloat = 352
+  static let emptyHeight: CGFloat = 48
+  static let maximumViewportHeight: CGFloat = 388
+  static let sectionHorizontalInset: CGFloat = 12
+  static let sectionHeaderHeight: CGFloat = 22
+  static let sectionHeaderBottomSpacing: CGFloat = 4
+  static let rowHeight: CGFloat = 34
+  static let rowSelectionHorizontalInset: CGFloat = 7
+  static let rowLeadingPadding: CGFloat = 5
+  static let rowTrailingPadding: CGFloat = 8
+  static let selectionCornerRadius: CGFloat = 6
+  static let scrollFadeHeight: CGFloat = 24
+  static let anchorGap: CGFloat = 8
+  static let screenEdgeInset: CGFloat = 12
+}
+
+private struct ArtifactMentionFieldFramePreferenceKey: PreferenceKey {
+  static let defaultValue = CGRect.zero
+
+  static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+    let next = nextValue()
+    if next.width > 0, next.height > 0 { value = next }
+  }
+}
+
+private struct ArtifactMentionPickerSizePreferenceKey: PreferenceKey {
+  static let defaultValue = CGSize.zero
+
+  static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+    let next = nextValue()
+    if next.width > 0, next.height > 0 { value = next }
+  }
+}
+
+private struct ArtifactMentionSurfaceFramePreferenceKey: PreferenceKey {
+  static let defaultValue = CGRect.zero
+
+  static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+    let next = nextValue()
+    if next.width > 0, next.height > 0 { value = next }
+  }
+}
+
+/// Attaches the picker to the actual input bounds. Placement is chosen once per
+/// `@` query from the measured space above and below the focused field, then
+/// recomputed if the docked keyboard moves. Padding reserves the chosen side so
+/// neither the picker nor its hit targets cover the input.
+struct ArtifactMentionAttachedField<Content: View>: View {
+  @Binding var text: String
+  let mentions: [ArtifactMention]
+  let writesMarkdown: Bool
+  let isActive: Bool
+  @Binding var selectedMentionID: String?
+  let content: Content
+
+  @State private var fieldFrame = CGRect.zero
+  @State private var sessionFieldFrame: CGRect?
+  @State private var pickerSize = CGSize.zero
+  @State private var keyboardTop = UIScreen.main.bounds.maxY
+  @State private var resolvedAnchor = ArtifactMentionSuggestionAnchor.below
+
+  init(
+    text: Binding<String>,
+    mentions: [ArtifactMention],
+    writesMarkdown: Bool,
+    isActive: Bool,
+    selectedMentionID: Binding<String?>,
+    @ViewBuilder content: () -> Content
+  ) {
+    _text = text
+    self.mentions = mentions
+    self.writesMarkdown = writesMarkdown
+    self.isActive = isActive
+    _selectedMentionID = selectedMentionID
+    self.content = content()
+  }
+
+  private var query: ArtifactMentionQuery? {
+    guard isActive else { return nil }
+    return ArtifactMentionQuery(input: text)
+  }
+
+  private var isShowingPicker: Bool { query != nil }
+
+  private var desiredPickerHeight: CGFloat {
+    guard let query else { return 0 }
+    let sections = ArtifactMentionCatalog.sections(
+      matching: query.text,
+      in: mentions,
+      itemsPerSection: 3
+    )
+    guard !sections.isEmpty else {
+      return MobileArtifactMentionPickerGeometry.emptyHeight
+    }
+    let contentHeight = sections.reduce(CGFloat.zero) { height, section in
+      height
+        + MobileArtifactMentionPickerGeometry.sectionHeaderHeight
+        + MobileArtifactMentionPickerGeometry.sectionHeaderBottomSpacing
+        + CGFloat(section.items.count) * MobileArtifactMentionPickerGeometry.rowHeight
+    }
+    return min(MobileArtifactMentionPickerGeometry.maximumViewportHeight, contentHeight)
+  }
+
+  private var resolvedSpace: CGFloat {
+    let frame = sessionFieldFrame ?? fieldFrame
+    guard frame.width > 0, frame.height > 0 else {
+      return MobileArtifactMentionPickerGeometry.maximumViewportHeight
+    }
+    switch resolvedAnchor {
+    case .above:
+      return max(
+        0,
+        frame.minY - MobileArtifactMentionPickerGeometry.screenEdgeInset
+      )
+    case .below:
+      return max(
+        0,
+        keyboardTop - frame.maxY - MobileArtifactMentionPickerGeometry.screenEdgeInset
+      )
+    }
+  }
+
+  private var resolvedPickerHeight: CGFloat {
+    let measuredHeight = pickerSize.height > 0 ? pickerSize.height : desiredPickerHeight
+    return min(measuredHeight, resolvedSpace)
+  }
+
+  private var reservedPickerHeight: CGFloat {
+    guard isShowingPicker else { return 0 }
+    guard resolvedPickerHeight > 0 else { return 0 }
+    return resolvedPickerHeight + MobileArtifactMentionPickerGeometry.anchorGap
+  }
+
+  var body: some View {
+    content
+      .background {
+        GeometryReader { proxy in
+          Color.clear.preference(
+            key: ArtifactMentionFieldFramePreferenceKey.self,
+            value: proxy.frame(in: .global)
+          )
+          .allowsHitTesting(false)
+        }
+      }
+      .overlay(alignment: .topLeading) {
+        if isShowingPicker {
+          GeometryReader { proxy in
+            ArtifactMentionSuggestions(
+              text: $text,
+              mentions: mentions,
+              writesMarkdown: writesMarkdown,
+              anchor: resolvedAnchor,
+              isActive: isActive,
+              selectedMentionID: $selectedMentionID,
+              heightLimit: resolvedSpace
+            )
+            .frame(width: proxy.size.width, alignment: .leading)
+            .background {
+              GeometryReader { pickerProxy in
+                Color.clear.preference(
+                  key: ArtifactMentionPickerSizePreferenceKey.self,
+                  value: pickerProxy.size
+                )
+                .allowsHitTesting(false)
+              }
+            }
+            .offset(
+              y: resolvedAnchor == .below
+                ? proxy.size.height + MobileArtifactMentionPickerGeometry.anchorGap
+                : -(
+                  resolvedPickerHeight
+                    + MobileArtifactMentionPickerGeometry.anchorGap
+                )
+            )
+            .zIndex(30)
+          }
+        }
+      }
+      .padding(.top, resolvedAnchor == .above ? reservedPickerHeight : 0)
+      .padding(.bottom, resolvedAnchor == .below ? reservedPickerHeight : 0)
+      .onPreferenceChange(ArtifactMentionFieldFramePreferenceKey.self) { frame in
+        fieldFrame = frame
+        if !isShowingPicker { sessionFieldFrame = nil }
+      }
+      .onPreferenceChange(ArtifactMentionPickerSizePreferenceKey.self) { size in
+        if size.width > 0, size.height > 0 { pickerSize = size }
+      }
+      .onChange(of: isShowingPicker) { _, isShowing in
+        if isShowing {
+          sessionFieldFrame = fieldFrame
+          resolveAnchor()
+        } else {
+          sessionFieldFrame = nil
+          selectedMentionID = nil
+        }
+      }
+      .onReceive(NotificationCenter.default.publisher(
+        for: UIResponder.keyboardWillChangeFrameNotification
+      )) { notification in
+        updateKeyboardTop(from: notification)
+      }
+      .onReceive(NotificationCenter.default.publisher(
+        for: UIResponder.keyboardWillHideNotification
+      )) { _ in
+        keyboardTop = UIScreen.main.bounds.maxY
+        if isShowingPicker { resolveAnchor() }
+      }
+  }
+
+  private func resolveAnchor() {
+    let frame = sessionFieldFrame ?? fieldFrame
+    guard frame.width > 0, frame.height > 0 else { return }
+    let spaceAbove = max(
+      0,
+      frame.minY - MobileArtifactMentionPickerGeometry.screenEdgeInset
+    )
+    let spaceBelow = max(
+      0,
+      keyboardTop - frame.maxY - MobileArtifactMentionPickerGeometry.screenEdgeInset
+    )
+    let usefulHeight = desiredPickerHeight
+    if spaceBelow >= usefulHeight || spaceBelow >= spaceAbove {
+      resolvedAnchor = .below
+    } else {
+      resolvedAnchor = .above
+    }
+  }
+
+  private func updateKeyboardTop(from notification: Notification) {
+    guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+    else { return }
+    let screen = UIScreen.main.bounds
+    keyboardTop = frame.maxY >= screen.maxY - 1 ? frame.minY : screen.maxY
+    if isShowingPicker { resolveAnchor() }
+  }
+}
+
+/// A layout-aware mobile mention surface shared by title and Markdown editors.
+/// Callers place it in normal layout below compact fields or in a bottom safe
+/// area inset above long-form editors, so results never cover editable content.
+struct ArtifactMentionSuggestions: View {
+  @Binding var text: String
+  let mentions: [ArtifactMention]
+  let writesMarkdown: Bool
+  let anchor: ArtifactMentionSuggestionAnchor
+  let isActive: Bool
+  @Binding var selectedMentionID: String?
+  var heightLimit: CGFloat? = nil
+
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var keyboardOverlap: CGFloat = 0
+  @State private var presentationFrame = CGRect.zero
+  @State private var presentationAvailableHeight: CGFloat?
+
+  private var query: ArtifactMentionQuery? {
+    guard isActive else { return nil }
+    return ArtifactMentionQuery(input: text)
+  }
+
+  private var sections: [ArtifactMentionSection] {
+    guard let query else { return [] }
+    return ArtifactMentionCatalog.sections(
+      matching: query.text,
+      in: mentions,
+      itemsPerSection: 3
+    )
+  }
+
+  private var visibleItems: [ArtifactMention] {
+    sections.flatMap(\.items)
+  }
+
+  private var listContentHeight: CGFloat {
+    sections.reduce(CGFloat.zero) { height, section in
+      height
+        + MobileArtifactMentionPickerGeometry.sectionHeaderHeight
+        + MobileArtifactMentionPickerGeometry.sectionHeaderBottomSpacing
+        + CGFloat(section.items.count) * MobileArtifactMentionPickerGeometry.rowHeight
+    }
+  }
+
+  /// The shared surface grows to the desktop geometry token, then yields only
+  /// to space measured at its actual mobile presentation edge or supplied by
+  /// an attached field. There is no size-class cap or synthetic minimum.
+  private var maximumCardHeight: CGFloat {
+    min(
+      MobileArtifactMentionPickerGeometry.maximumViewportHeight,
+      heightLimit ?? .greatestFiniteMagnitude,
+      presentationAvailableHeight ?? .greatestFiniteMagnitude
+    )
+  }
+
+  private var isScrollable: Bool {
+    listContentHeight > listViewportHeight + 0.5
+  }
+
+  private var listViewportHeight: CGFloat {
+    min(listContentHeight, max(0, maximumCardHeight))
+  }
+
+  var body: some View {
+    Group {
+      if let query {
+        pickerCard(query: query)
+        .frame(maxWidth: MobileArtifactMentionPickerGeometry.surfaceMaxWidth)
+        .background {
+          GeometryReader { proxy in
+            Color.clear.preference(
+              key: ArtifactMentionSurfaceFramePreferenceKey.self,
+              value: proxy.frame(in: .global)
+            )
+            .allowsHitTesting(false)
+          }
+        }
+        .transition(
+          .asymmetric(
+            insertion: .move(edge: anchor.transitionEdge).combined(with: .opacity),
+            removal: .opacity
+          )
+        )
+        .accessibilityIdentifier("artifact-mention-picker")
+        .onAppear { reconcileSelection(with: visibleItems.map(\.id)) }
+        .onChange(of: visibleItems.map(\.id)) { _, ids in
+          reconcileSelection(with: ids)
+        }
+        .onKeyPress(.upArrow) {
+          handleArtifactMentionKeyCommand(
+            .previous,
+            text: $text,
+            mentions: mentions,
+            writesMarkdown: writesMarkdown,
+            selectedMentionID: $selectedMentionID
+          ) ? .handled : .ignored
+        }
+        .onKeyPress(.downArrow) {
+          handleArtifactMentionKeyCommand(
+            .next,
+            text: $text,
+            mentions: mentions,
+            writesMarkdown: writesMarkdown,
+            selectedMentionID: $selectedMentionID
+          ) ? .handled : .ignored
+        }
+        .onKeyPress(.return) {
+          handleArtifactMentionKeyCommand(
+            .select,
+            text: $text,
+            mentions: mentions,
+            writesMarkdown: writesMarkdown,
+            selectedMentionID: $selectedMentionID
+          ) ? .handled : .ignored
+        }
+      }
+    }
+    .allowsHitTesting(query != nil)
+    .onPreferenceChange(ArtifactMentionSurfaceFramePreferenceKey.self) { frame in
+      updatePresentationAvailableHeight(from: frame)
+    }
+    .onReceive(NotificationCenter.default.publisher(
+      for: UIResponder.keyboardWillChangeFrameNotification
+    )) { notification in
+      updateKeyboardOverlap(from: notification)
+    }
+    .onReceive(NotificationCenter.default.publisher(
+      for: UIResponder.keyboardWillHideNotification
+    )) { _ in
+      keyboardOverlap = 0
+      recalculatePresentationAvailableHeight()
+    }
+    .animation(PanelTheme.quick, value: maximumCardHeight)
+  }
+
+  private func pickerCard(query: ArtifactMentionQuery) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+      if sections.isEmpty {
+        HStack(spacing: 8) {
+          Image(systemName: "magnifyingglass")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.white.opacity(0.35))
+          Text("No matching artifacts")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.white.opacity(0.48))
+          Spacer()
+        }
+        .padding(.horizontal, MobileArtifactMentionPickerGeometry.sectionHorizontalInset)
+        .frame(height: MobileArtifactMentionPickerGeometry.emptyHeight)
+      } else {
+        mentionList(query: query)
+      }
+    }
+    .background(
+      Color(red: 0.075, green: 0.075, blue: 0.08).opacity(0.985),
+      in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: 12, style: .continuous)
+        .stroke(.white.opacity(0.13), lineWidth: 1)
+    }
+    .shadow(color: .black.opacity(0.42), radius: 18, y: 7)
+  }
+
+  private func mentionList(query: ArtifactMentionQuery) -> some View {
+    ScrollViewReader { reader in
+      ScrollView {
+        LazyVStack(alignment: .leading, spacing: 0) {
+          ForEach(sections) { section in
+            sectionHeader(section.kind)
+            ForEach(section.items) { mention in
+              Button {
+                select(mention, query: query)
+              } label: {
+                mentionRow(mention)
+              }
+              .buttonStyle(.plain)
+              .id(mention.id)
+              .accessibilityLabel(
+                "\(section.kind.displayName), \(mention.title), \(mention.subtitle ?? "")"
+              )
+              .accessibilityHint("Inserts a link to this artifact")
+            }
+          }
+        }
+      }
+      .frame(height: listViewportHeight)
+      .scrollIndicators(.visible)
+      .scrollBounceBehavior(.basedOnSize)
+      .overlay(alignment: .bottom) {
+        if isScrollable {
+          LinearGradient(
+            colors: [.clear, Color.black.opacity(0.56)],
+            startPoint: .top,
+            endPoint: .bottom
+          )
+          .frame(height: MobileArtifactMentionPickerGeometry.scrollFadeHeight)
+          .allowsHitTesting(false)
+          .accessibilityHidden(true)
+        }
+      }
+      .onChange(of: selectedMentionID) { _, id in
+        guard let id else { return }
+        if reduceMotion {
+          reader.scrollTo(id, anchor: .center)
+        } else {
+          withAnimation(.easeOut(duration: 0.14)) {
+            reader.scrollTo(id, anchor: .center)
+          }
+        }
+      }
+      .onAppear {
+        if let selectedMentionID {
+          reader.scrollTo(selectedMentionID, anchor: .center)
+        }
+      }
+    }
+  }
+
+  private func sectionHeader(_ kind: ArtifactMentionKind) -> some View {
+    HStack(spacing: 6) {
+      Image(systemName: kind.systemImage)
+        .font(.system(size: 9, weight: .semibold))
+      Text(kind.displayName.uppercased())
+        .font(.system(size: 9, weight: .bold))
+        .tracking(0.5)
+    }
+    .foregroundStyle(.white.opacity(0.4))
+    .padding(.horizontal, MobileArtifactMentionPickerGeometry.sectionHorizontalInset)
+    .frame(
+      height: MobileArtifactMentionPickerGeometry.sectionHeaderHeight,
+      alignment: .bottomLeading
+    )
+    .padding(.bottom, MobileArtifactMentionPickerGeometry.sectionHeaderBottomSpacing)
+  }
+
+  private func mentionRow(_ mention: ArtifactMention) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      Text(mention.title)
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(.white.opacity(0.9))
+        .lineLimit(1)
+        .layoutPriority(2)
+
+      if let subtitle = mention.subtitle, !subtitle.isEmpty {
+        Text(subtitle)
+          .font(.system(size: 9, weight: .regular))
+          .foregroundStyle(.white.opacity(0.4))
+          .lineLimit(1)
+          .layoutPriority(1)
+      }
+
+      Spacer(minLength: 6)
+
+      Image(systemName: "return")
+        .font(.system(size: 9, weight: .bold))
+        .foregroundStyle(
+          .white.opacity(selectedMentionID == mention.id ? 0.48 : 0.22)
+        )
+        .frame(width: 12, alignment: .trailing)
+        .accessibilityHidden(true)
+    }
+    .padding(.leading, MobileArtifactMentionPickerGeometry.rowLeadingPadding)
+    .padding(.trailing, MobileArtifactMentionPickerGeometry.rowTrailingPadding)
+    .frame(height: MobileArtifactMentionPickerGeometry.rowHeight)
+    .background(
+      selectedMentionID == mention.id
+        ? Color(red: 0.416, green: 0.718, blue: 1).opacity(0.16)
+        : .clear,
+      in: RoundedRectangle(
+        cornerRadius: MobileArtifactMentionPickerGeometry.selectionCornerRadius,
+        style: .continuous
+      )
+    )
+    .padding(.horizontal, MobileArtifactMentionPickerGeometry.rowSelectionHorizontalInset)
+    .contentShape(Rectangle())
+  }
+
+  private func select(_ mention: ArtifactMention, query: ArtifactMentionQuery) {
+    query.replacing(in: &text, with: mention, markdown: writesMarkdown)
+    if !text.hasSuffix(" ") { text.append(" ") }
+    selectedMentionID = nil
+  }
+
+  private func reconcileSelection(with ids: [String]) {
+    guard !ids.isEmpty else {
+      selectedMentionID = nil
+      return
+    }
+    if selectedMentionID.map(ids.contains) != true {
+      selectedMentionID = ids.first
+    }
+  }
+
+  private func updatePresentationAvailableHeight(from frame: CGRect) {
+    presentationFrame = frame
+    recalculatePresentationAvailableHeight()
+  }
+
+  private func recalculatePresentationAvailableHeight() {
+    guard presentationFrame.width > 0, presentationFrame.height > 0 else {
+      presentationAvailableHeight = nil
+      return
+    }
+
+    let screen = UIScreen.main.bounds
+    let window = UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .flatMap { $0.windows }
+      .first(where: \.isKeyWindow)
+    let safeInsets = window?.safeAreaInsets ?? .zero
+    let safeTop = screen.minY
+      + safeInsets.top
+      + MobileArtifactMentionPickerGeometry.screenEdgeInset
+    let safeScreenBottom = screen.maxY
+      - safeInsets.bottom
+      - MobileArtifactMentionPickerGeometry.screenEdgeInset
+    let keyboardTop = keyboardOverlap > 0
+      ? screen.maxY - keyboardOverlap - MobileArtifactMentionPickerGeometry.screenEdgeInset
+      : safeScreenBottom
+    let safeBottom = min(safeScreenBottom, keyboardTop)
+
+    let availableHeight: CGFloat
+    switch anchor {
+    case .above:
+      availableHeight = max(0, min(presentationFrame.maxY, safeBottom) - safeTop)
+    case .below:
+      availableHeight = max(0, safeBottom - max(presentationFrame.minY, safeTop))
+    }
+    if presentationAvailableHeight.map({ abs($0 - availableHeight) > 0.5 }) != false {
+      presentationAvailableHeight = availableHeight
+    }
+  }
+
+  private func updateKeyboardOverlap(from notification: Notification) {
+    guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+    else { return }
+    let screen = UIScreen.main.bounds
+    guard frame.maxY >= screen.maxY - 1 else {
+      keyboardOverlap = 0
+      recalculatePresentationAvailableHeight()
+      return
+    }
+    keyboardOverlap = max(0, screen.maxY - frame.minY)
+    recalculatePresentationAvailableHeight()
   }
 }

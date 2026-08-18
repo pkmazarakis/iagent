@@ -758,6 +758,13 @@ struct CalendarMobileView: View {
       }
     }
     .toolbar(.hidden, for: .navigationBar)
+    .navigationDestination(item: $model.calendarEventToPresentID) { eventID in
+      if let event = model.calendarEvent(id: eventID) {
+        CalendarEventDetailView(model: model, event: event)
+      } else {
+        MissingCalendarEventView()
+      }
+    }
   }
 
   private var calendarHero: some View {
@@ -802,6 +809,26 @@ struct CalendarMobileView: View {
     }
     .padding(.horizontal, 22)
     .padding(.vertical, 16)
+  }
+}
+
+private struct MissingCalendarEventView: View {
+  @Environment(\.dismiss) private var dismiss
+
+  var body: some View {
+    PanelScreen {
+      VStack(alignment: .leading, spacing: 28) {
+        JoiBackButton { dismiss() }
+        EmptyPanelState(
+          symbol: "calendar.badge.exclamationmark",
+          title: "Event unavailable",
+          detail: "This calendar event may have moved or been deleted."
+        )
+      }
+      .padding(.horizontal, PanelTheme.horizontalPadding)
+      .padding(.top, 8)
+    }
+    .toolbar(.hidden, for: .navigationBar)
   }
 }
 

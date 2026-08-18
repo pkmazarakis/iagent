@@ -498,6 +498,8 @@ struct NoteEditorView: View {
   @FocusState private var isTitleFocused: Bool
   @State private var title: String
   @State private var bodyText: String
+  @State private var titleMentionSelectionID: String?
+  @State private var bodyMentionSelectionID: String?
   @State private var mode: Mode = .edit
   @State private var isSaving = false
   @State private var isBodyFocused = false
@@ -623,22 +625,33 @@ struct NoteEditorView: View {
 
   private var editor: some View {
     VStack(spacing: 0) {
-      TextField("Title", text: $title)
-        .focused($isTitleFocused)
-        .defaultFocus($isTitleFocused, route.note == nil)
-        .font(.system(size: 34, weight: .bold))
-        .foregroundStyle(PanelTheme.primary)
-        .tint(PanelTheme.violet)
-        .textFieldStyle(.plain)
-        .textInputAutocapitalization(.sentences)
-        .lineLimit(1)
-        .submitLabel(.next)
-        .onSubmit(focusDescriptionEditor)
-        .accessibilityIdentifier("note-editor-title")
-        .accessibilityHint("Press Return to move to Write something")
-        .padding(.horizontal, 31)
-        .padding(.top, 35)
-        .padding(.bottom, 18)
+      ArtifactMentionAttachedField(
+        text: $title,
+        mentions: model.artifactMentions,
+        writesMarkdown: false,
+        isActive: isTitleFocused,
+        selectedMentionID: $titleMentionSelectionID
+      ) {
+        TextField("Title", text: $title)
+          .focused($isTitleFocused)
+          .defaultFocus($isTitleFocused, route.note == nil)
+          .font(.system(size: 34, weight: .bold))
+          .foregroundStyle(PanelTheme.primary)
+          .tint(PanelTheme.violet)
+          .textFieldStyle(.plain)
+          .textInputAutocapitalization(.sentences)
+          .lineLimit(1)
+          .submitLabel(.next)
+          .onSubmit(focusDescriptionEditor)
+          .onKeyPress(.upArrow) { handleTitleMentionKey(.previous) }
+          .onKeyPress(.downArrow) { handleTitleMentionKey(.next) }
+          .onKeyPress(.return) { handleTitleMentionKey(.select) }
+          .accessibilityIdentifier("note-editor-title")
+          .accessibilityHint("Press Return to move to Write something")
+      }
+      .padding(.horizontal, 31)
+      .padding(.top, 35)
+      .padding(.bottom, 18)
 
       JoiDottedDivider(inset: 24)
 
@@ -655,7 +668,21 @@ struct NoteEditorView: View {
           isFocused: $isBodyFocused,
           request: markdownRequest,
           activeCommands: $activeMarkdownCommands,
-          accessibilityIdentifier: "note-editor-body"
+          accessibilityIdentifier: "note-editor-body",
+          openURL: model.handleDeepLink,
+          handlesArtifactMentionKeys: isBodyFocused
+            && ArtifactMentionQuery(input: bodyText) != nil,
+          onArtifactMentionKey: handleBodyMentionKey
+        )
+      }
+      .safeAreaInset(edge: .bottom, spacing: 8) {
+        ArtifactMentionSuggestions(
+          text: $bodyText,
+          mentions: model.artifactMentions,
+          writesMarkdown: true,
+          anchor: .above,
+          isActive: isBodyFocused,
+          selectedMentionID: $bodyMentionSelectionID
         )
       }
       .padding(.horizontal, 24)
@@ -693,6 +720,28 @@ struct NoteEditorView: View {
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 8)
+  }
+
+  private func handleTitleMentionKey(
+    _ command: ArtifactMentionKeyCommand
+  ) -> KeyPress.Result {
+    handleArtifactMentionKeyCommand(
+      command,
+      text: $title,
+      mentions: model.artifactMentions,
+      writesMarkdown: false,
+      selectedMentionID: $titleMentionSelectionID
+    ) ? .handled : .ignored
+  }
+
+  private func handleBodyMentionKey(_ command: ArtifactMentionKeyCommand) -> Bool {
+    handleArtifactMentionKeyCommand(
+      command,
+      text: $bodyText,
+      mentions: model.artifactMentions,
+      writesMarkdown: true,
+      selectedMentionID: $bodyMentionSelectionID
+    )
   }
 
   private func focusDescriptionEditor() {
