@@ -50,6 +50,7 @@ let package = Package(
       resources: [
         .copy("Resources/Brand"),
         .copy("Resources/CalendarDays"),
+        .copy("Resources/ThirdPartyNotices"),
       ],
       linkerSettings: [
         .linkedFramework("AVFoundation"),

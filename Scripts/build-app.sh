@@ -35,6 +35,10 @@ if [[ "$SIGNING_IDENTITY" != "-" ]]; then
     print -u2 -- "Code-signing entitlements do not exist at $ENTITLEMENTS."
     exit 2
   fi
+  if [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.automation.apple-events' "$ENTITLEMENTS" 2>/dev/null || true)" != "true" ]]; then
+    print -u2 -- "Code-signing entitlements must allow Apple Events automation for direct Messages sends."
+    exit 2
+  fi
 fi
 if [[ "${IAGENT_REQUIRE_FRESH_APP:-0}" == "1" && -e "$APP" ]]; then
   print -u2 -- "Refusing to reuse an existing app staging path: $APP"
@@ -78,6 +82,7 @@ EXPECTED_PANEL_RESOURCES=(
   "Brand/message-cloud-sync-cloud.svg"
   "CalendarDays/calendar-outline.svg"
   "CalendarDays/calendar-digit-0.svg"
+  "ThirdPartyNotices/openclaw-imsg-LICENSE.txt"
 )
 if [[ ! -d "$PANEL_RESOURCE_BUNDLE" ]]; then
   print -u2 -- "Packaged SwiftPM resource bundle is missing at $PANEL_RESOURCE_BUNDLE."

@@ -36,29 +36,101 @@ final class MessageReplySourceContractTests: XCTestCase {
     XCTAssertFalse(view.contains("MessageBubble(message: request"))
   }
 
-  func testMacUsesPublicSharingServiceAndExplicitPreHandoffConfirmation() throws {
+  func testMacUsesBoundedPublicAppleScriptWithExplicitComposeFallback() throws {
     let transport = try source("Sources/iAgentPanel/MessageReplyTransport.swift")
+    let pipeline = try source("Sources/iAgentPanel/MessagesDirectSendPipeline.swift")
     let view = try source("Sources/iAgentPanel/MessageInboxViews.swift")
     let controller = try source("Sources/iAgentPanel/iAgentPanelApp.swift")
+    let info = try source("Sources/iAgentPanel/Info.plist")
+    let entitlements = try source(
+      "Sources/iAgentPanel/iAgentPanelTestFlight.entitlements"
+    )
+    let developmentEntitlements = try source(
+      "Sources/iAgentPanel/iAgentPanel.entitlements"
+    )
+    let releaseEntitlements = try source(
+      "Sources/iAgentPanel/iAgentPanelRelease.entitlements"
+    )
+    let buildScript = try source("Scripts/build-app.sh")
+    let readiness = try source("Scripts/check-macos-testflight-readiness.sh")
+    let signing = try source("Scripts/verify-macos-cloudkit-signing.sh")
 
     XCTAssertTrue(transport.contains("NSSharingService(named: .composeMessage)"))
-    XCTAssertTrue(transport.contains("service.recipients = payload.recipients"))
-    XCTAssertTrue(transport.contains("service.perform(withItems: payload.items)"))
-    XCTAssertTrue(transport.contains("case handoffRequested"))
-    XCTAssertFalse(transport.lowercased().contains("osascript"))
-    XCTAssertFalse(transport.lowercased().contains("applescript"))
+    XCTAssertTrue(transport.contains("service.recipients = [payload.recipient]"))
+    XCTAssertTrue(transport.contains("service.perform(withItems: items)"))
+    XCTAssertTrue(transport.contains("case composeRequested"))
+    XCTAssertTrue(transport.contains("case outcomeUncertain(String)"))
+    XCTAssertTrue(transport.contains("case fallbackRequired(String)"))
+    XCTAssertTrue(transport.contains("DirectMessagesReplyTransport"))
     XCTAssertFalse(transport.lowercased().contains("scriptingbridge"))
-    XCTAssertFalse(transport.lowercased().contains("imessage:"))
+    XCTAssertFalse(transport.contains("IMCore"))
 
+    XCTAssertTrue(pipeline.contains("/usr/bin/osascript"))
+    XCTAssertTrue(pipeline.contains("process.arguments = [\"-l\", \"AppleScript\", \"-\"] + command.arguments"))
+    XCTAssertTrue(pipeline.contains("tell application id \"com.apple.MobileSMS\""))
+    XCTAssertTrue(pipeline.contains("static let timeout: TimeInterval = 60"))
+    XCTAssertTrue(pipeline.contains("Darwin.kill(process.processIdentifier, SIGKILL)"))
+    XCTAssertTrue(pipeline.contains("[recipient, body, service.appleScriptValue, chatGUID ?? \"\"]"))
+    XCTAssertTrue(pipeline.contains("PRAGMA query_only = ON"))
+    XCTAssertTrue(pipeline.contains("m.ROWID > ?2"))
+    XCTAssertTrue(pipeline.contains("plainTextExpression"))
+    XCTAssertTrue(pipeline.contains("MessageAttributedBodyDecoder.decode"))
+    XCTAssertTrue(pipeline.contains("contains(body)"))
+    XCTAssertTrue(pipeline.contains("do not retry automatically"))
+    XCTAssertFalse(pipeline.contains("IMCore"))
+
+    XCTAssertTrue(view.contains("replyTransport: DirectMessagesReplyTransport()"))
+    XCTAssertTrue(view.contains("sendUserInitiated("))
+    XCTAssertTrue(view.contains("MacMessageReplyService(serviceName: conversation.serviceName)"))
+    XCTAssertTrue(view.contains("case let .outcomeUncertain(message):"))
+    XCTAssertTrue(view.contains("case let .fallbackRequired(message):"))
     XCTAssertTrue(view.contains("Open in Messages?"))
-    XCTAssertTrue(view.contains("beginUserConfirmedHandoff(request)"))
-    XCTAssertTrue(view.contains("iAgent will not press Send"))
+    XCTAssertTrue(view.contains("beginUserConfirmedFallback(request)"))
+    XCTAssertTrue(view.contains("will not send automatically"))
     XCTAssertTrue(view.contains("guard !conversation.isGroup else { return [] }"))
     XCTAssertTrue(view.contains("Phase 1 supports one-to-one conversations only"))
-    XCTAssertFalse(view.contains("title: \"Opened Messages\""))
     XCTAssertTrue(controller.contains("func setMessageReplyTransportEnabled(_ enabled: Bool)"))
     XCTAssertTrue(controller.contains("scrubMessageReplyAddresses()"))
     XCTAssertTrue(controller.contains("startMessageProviderUpdates()"))
+    XCTAssertTrue(controller.contains("return \"Back to Messages\""))
+    XCTAssertTrue(controller.contains("messageReplySendInFlightConversationID"))
+    XCTAssertTrue(controller.contains("func beginMessageReplySend(for conversationID: String) -> Bool"))
+    XCTAssertTrue(controller.contains("func finishMessageReplySend(for conversationID: String)"))
+    XCTAssertTrue(controller.contains("nextPresentation != .expanded"))
+    XCTAssertTrue(controller.contains("messageReplyDraftsByConversationID"))
+    XCTAssertTrue(view.contains("controller.beginMessageReplySend(for: conversation.id)"))
+    XCTAssertTrue(view.contains("controller.finishMessageReplySend(for: conversationID)"))
+    XCTAssertTrue(view.contains("controller.messageReplyDraft(for: conversation.id)"))
+    XCTAssertTrue(view.contains("controller.storeMessageReplyDraft(draft, for: conversation.id)"))
+
+    XCTAssertTrue(info.contains("NSAppleEventsUsageDescription"))
+    XCTAssertTrue(info.contains("only after you press Send"))
+    XCTAssertTrue(entitlements.contains("com.apple.security.automation.apple-events"))
+    XCTAssertTrue(entitlements.contains("com.apple.security.temporary-exception.apple-events"))
+    XCTAssertTrue(entitlements.contains("com.apple.MobileSMS"))
+    XCTAssertTrue(entitlements.contains("com.apple.iCal"))
+    let entitlementObject = try XCTUnwrap(
+      try PropertyListSerialization.propertyList(
+        from: Data(entitlements.utf8),
+        options: [],
+        format: nil
+      ) as? [String: Any]
+    )
+    XCTAssertEqual(
+      entitlementObject["com.apple.security.temporary-exception.apple-events"] as? [String],
+      ["com.apple.MobileSMS", "com.apple.iCal"]
+    )
+    XCTAssertTrue(developmentEntitlements.contains("com.apple.security.automation.apple-events"))
+    XCTAssertTrue(releaseEntitlements.contains("com.apple.security.automation.apple-events"))
+    XCTAssertTrue(buildScript.contains("Code-signing entitlements must allow Apple Events automation"))
+    XCTAssertTrue(readiness.contains("Apple Events automation entitlement is required"))
+    XCTAssertTrue(readiness.contains("Messages must be the first sandbox Apple Events target"))
+    XCTAssertTrue(readiness.contains("Calendar must remain the second sandbox Apple Events target"))
+    XCTAssertTrue(readiness.contains("targets must be limited to Messages and Calendar"))
+    XCTAssertTrue(signing.contains("Apple Events automation entitlement is missing"))
+    XCTAssertTrue(signing.contains("Messages sandbox Apple Events target is missing or out of order"))
+    XCTAssertTrue(signing.contains("Calendar sandbox Apple Events target is missing or out of order"))
+    XCTAssertTrue(signing.contains("targets contain an unexpected app"))
   }
 
   func testMacDirectComposerMatchesSingleFieldVoiceAndReturnContract() throws {
@@ -69,8 +141,9 @@ final class MessageReplySourceContractTests: XCTestCase {
     )
     let composer = String(view[composerStart.lowerBound..<composerEnd.lowerBound])
 
-    XCTAssertTrue(composer.contains("TextField(\"iMessage\""))
-    XCTAssertTrue(composer.contains("attemptHandoff()"))
+    XCTAssertTrue(composer.contains("TextField(replyPlaceholder"))
+    XCTAssertTrue(view.contains("\"Text Message\""))
+    XCTAssertTrue(composer.contains("attemptSend()"))
     XCTAssertTrue(composer.contains("Image(systemName: \"arrow.up\")"))
     XCTAssertTrue(composer.contains("Color.agentBlue"))
     XCTAssertTrue(composer.contains("\"mic.fill\" : \"mic\""))
@@ -81,8 +154,8 @@ final class MessageReplySourceContractTests: XCTestCase {
     XCTAssertTrue(composer.contains("return .ignored"))
     XCTAssertTrue(composer.contains("return .handled"))
     XCTAssertTrue(composer.contains(".accessibilityLabel(\"Message\")"))
-    XCTAssertTrue(composer.contains("Press Return to review in Messages"))
-    XCTAssertTrue(composer.contains("Review reply in Messages"))
+    XCTAssertTrue(composer.contains("Press Return to send"))
+    XCTAssertTrue(composer.contains("Send message"))
     XCTAssertTrue(view.contains("toggleReplyDictation()"))
     XCTAssertTrue(view.contains("replyDictation.start()"))
     XCTAssertFalse(composer.contains("recipientControl"))
@@ -92,7 +165,7 @@ final class MessageReplySourceContractTests: XCTestCase {
     XCTAssertFalse(composer.contains("controller.isMessageInboxSyncing"))
     XCTAssertFalse(composer.contains("Opens Messages for review"))
 
-    let attemptStart = try XCTUnwrap(view.range(of: "private func attemptHandoff()"))
+    let attemptStart = try XCTUnwrap(view.range(of: "private func attemptSend()"))
     let attemptEnd = try XCTUnwrap(
       view.range(
         of: "private func beginRecipientResolution()",
@@ -106,6 +179,10 @@ final class MessageReplySourceContractTests: XCTestCase {
     XCTAssertFalse(attempt.contains("setMessageReplyTransportEnabled(true)"))
 
     XCTAssertFalse(view.contains("case .enable:"))
+    XCTAssertTrue(view.contains("case .sent:"))
+    XCTAssertTrue(view.contains("if draftBody == request.body"))
+    XCTAssertTrue(view.contains("case let .outcomeUncertain(message):"))
+    XCTAssertTrue(view.contains("Check Messages before retrying"))
   }
 
   func testInitialMessagesBackfillStopsLoadingBeforeIdleUpdatesStream() throws {

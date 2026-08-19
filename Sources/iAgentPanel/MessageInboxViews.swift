@@ -3,13 +3,16 @@ import SwiftUI
 import iAgentCore
 
 enum MessageInboxLayout {
+    static let sidebarWidth: CGFloat = 268
+    static let conversationRowHeight: CGFloat = 58
+    static let detailHeaderHeight: CGFloat = 46
+    static let composerHeight: CGFloat = 38
+    static let composerActionSize: CGFloat = 28
+    static let detailRevealDuration: TimeInterval = 0.22
     static let searchAccessorySize: CGFloat = 24
     static let searchVerticalInset: CGFloat = 8
     static let searchRowHeight: CGFloat = searchAccessorySize + searchVerticalInset * 2
     static let searchFontSize: CGFloat = 12
-    static let metadataGap: CGFloat = 20
-    static let metadataWidth: CGFloat = 90
-    static let relativeTimeWidth: CGFloat = 22
 }
 
 enum MessageAvatarTone: Equatable {
@@ -54,26 +57,83 @@ struct MessageInboxView: View {
 
     var body: some View {
         Group {
-            if let selectedConversation {
-                MessageConversationPage(
-                    controller: controller,
-                    conversation: selectedConversation,
-                    messages: controller.retainedMessages(for: selectedConversation.id),
-                    replyTransport: AppStoreMessagesHandoffTransport()
-                )
-            } else if controller.visibleMessageConversations.isEmpty {
+            if controller.visibleMessageConversations.isEmpty {
                 availabilityState
             } else {
-                conversationList
+                splitInbox
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .transition(.opacity)
-        .animation(
-            reduceMotion
-                ? .easeOut(duration: 0.12)
-                : .timingCurve(0.2, 0, 0, 1, duration: 0.16),
-            value: controller.selectedMessageConversationID
+    }
+
+    private var splitInbox: some View {
+        HStack(spacing: 0) {
+            conversationList
+                .frame(width: MessageInboxLayout.sidebarWidth)
+                .background(Color.white.opacity(0.012))
+                .overlay(alignment: .trailing) {
+                    Rectangle()
+                        .fill(.white.opacity(0.075))
+                        .frame(width: 1)
+                }
+
+            ZStack {
+                Color.clear
+
+                if let selectedConversation {
+                    MessageConversationPage(
+                        controller: controller,
+                        conversation: selectedConversation,
+                        messages: controller.retainedMessages(for: selectedConversation.id),
+                        replyTransport: DirectMessagesReplyTransport()
+                    )
+                    .id(selectedConversation.id)
+                    .transition(detailTransition)
+                } else {
+                    conversationPlaceholder
+                        .transition(.opacity)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+        }
+        .animation(detailAnimation, value: controller.selectedMessageConversationID)
+    }
+
+    private var conversationPlaceholder: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "message")
+                .font(.system(size: 16, weight: .medium))
+            Text("Select a conversation")
+                .font(.system(size: 11.5, weight: .semibold))
+            Text("Your inbox stays visible while you read and reply.")
+                .font(.system(size: 9.5, weight: .regular))
+        }
+        .foregroundStyle(.white.opacity(0.34))
+        .multilineTextAlignment(.center)
+        .padding(24)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var detailAnimation: Animation {
+        reduceMotion
+            ? .easeOut(duration: 0.12)
+            : .timingCurve(
+                0.2,
+                0.8,
+                0.2,
+                1,
+                duration: MessageInboxLayout.detailRevealDuration
+            )
+    }
+
+    private var detailTransition: AnyTransition {
+        if reduceMotion {
+            return .opacity
+        }
+        return .modifier(
+            active: MessageDetailRevealModifier(opacity: 0, horizontalOffset: 6),
+            identity: MessageDetailRevealModifier(opacity: 1, horizontalOffset: 0)
         )
     }
 
@@ -105,6 +165,7 @@ struct MessageInboxView: View {
                                 latestMessage: controller.retainedMessages(for: conversation.id).last,
                                 unreadCount: controller.unreadCount(for: conversation.id),
                                 isAwaitingReply: controller.isAwaitingReply(for: conversation),
+                                isSelected: controller.selectedMessageConversationID == conversation.id,
                                 referenceDate: controller.referenceNow
                             ) {
                                 controller.selectMessageConversation(conversation.id)
@@ -113,7 +174,8 @@ struct MessageInboxView: View {
                             Rectangle()
                                 .fill(.white.opacity(0.065))
                                 .frame(height: 1)
-                                .padding(.leading, 60)
+                                .padding(.leading, 54)
+                                .padding(.trailing, 8)
                         }
 
                         HStack(spacing: 6) {
@@ -246,6 +308,7 @@ private struct MessageConversationRow: View {
     let latestMessage: SyncedMessage?
     let unreadCount: Int
     let isAwaitingReply: Bool
+    let isSelected: Bool
     let referenceDate: Date
     let action: () -> Void
     @State private var hovering = false
@@ -253,57 +316,69 @@ private struct MessageConversationRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                MessageAvatarView(conversation: conversation, size: 26)
+                MessageAvatarView(conversation: conversation, size: 30)
 
-                HStack(spacing: 6) {
-                    Text(conversation.displayName)
-                        .font(.system(size: 11.5, weight: unreadCount > 0 ? .semibold : .medium))
-                        .foregroundStyle(.white.opacity(unreadCount > 0 ? 0.95 : 0.76))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .layoutPriority(2)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        Text(conversation.displayName)
+                            .font(
+                                .system(
+                                    size: 11.5,
+                                    weight: unreadCount > 0 ? .semibold : .medium
+                                )
+                            )
+                            .foregroundStyle(.white.opacity(unreadCount > 0 ? 0.95 : 0.78))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .layoutPriority(1)
 
-                    Text("·")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.24))
-                        .accessibilityHidden(true)
+                        Spacer(minLength: 4)
 
-                    Text(preview)
-                        .font(.system(size: 10.5, weight: unreadCount > 0 ? .medium : .regular))
-                        .foregroundStyle(.white.opacity(unreadCount > 0 ? 0.56 : 0.38))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .layoutPriority(0)
+                        Text(relativeTime)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.white.opacity(unreadCount > 0 ? 0.58 : 0.34))
+                            .monospacedDigit()
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+
+                    HStack(spacing: 5) {
+                        Text(preview)
+                            .font(
+                                .system(
+                                    size: 10,
+                                    weight: unreadCount > 0 ? .medium : .regular
+                                )
+                            )
+                            .foregroundStyle(.white.opacity(unreadCount > 0 ? 0.58 : 0.4))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+
+                        Spacer(minLength: 2)
+
+                        stateMarker(isVisible: isAwaitingReply, color: .agentAmber)
+                        stateMarker(isVisible: unreadCount > 0, color: .agentCoral)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-
-                HStack(spacing: MessageInboxLayout.metadataGap) {
-                    stateMarker(isVisible: isAwaitingReply, color: .agentAmber)
-                    stateMarker(isVisible: unreadCount > 0, color: .agentCoral)
-
-                    Text(relativeTime)
-                        .font(.system(size: 9.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(unreadCount > 0 ? 0.58 : 0.34))
-                        .monospacedDigit()
-                        .fixedSize(horizontal: true, vertical: false)
-                        .frame(width: MessageInboxLayout.relativeTimeWidth, alignment: .leading)
-                }
-                .frame(width: MessageInboxLayout.metadataWidth, alignment: .trailing)
-                .accessibilityHidden(true)
             }
-            .padding(.horizontal, PanelPageLayout.contentInset)
-            .frame(height: 50)
-            .contentShape(Rectangle())
-            .background(.white.opacity(hovering ? 0.03 : 0))
+            .padding(.horizontal, 10)
+            .frame(height: MessageInboxLayout.conversationRowHeight)
+            .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .background(
+                Color.white.opacity(isSelected ? 0.085 : (hovering ? 0.035 : 0)),
+                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+            )
         }
         .buttonStyle(.plain)
+        .padding(.horizontal, 6)
         .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: isSelected)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(conversation.displayName)
         .accessibilityValue(
             accessibilityValue
         )
-        .accessibilityHint("Open read-only message history")
+        .accessibilityHint("Show this conversation alongside the inbox")
     }
 
     private func stateMarker(isVisible: Bool, color: Color) -> some View {
@@ -339,6 +414,17 @@ private struct MessageConversationRow: View {
     }
 }
 
+private struct MessageDetailRevealModifier: ViewModifier {
+    let opacity: Double
+    let horizontalOffset: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(opacity)
+            .offset(x: horizontalOffset)
+    }
+}
+
 private struct MessageConversationPage: View {
     @ObservedObject var controller: PanelController
     let conversation: SyncedMessageConversation
@@ -350,10 +436,11 @@ private struct MessageConversationPage: View {
     @State private var selectedRecipientIDs = Set<String>()
     @State private var resolvedRecipients: [MessageReplyRecipient] = []
     @State private var isResolvingRecipient = false
+    @State private var isSendingReply = false
     @State private var isStartingReplyDictation = false
     @State private var retryAfterMessagesAccess = false
     @State private var recipientResolutionTask: Task<Void, Never>?
-    @State private var pendingRequest: MessageReplyRequest?
+    @State private var pendingFallbackRequest: MessageReplyRequest?
     @State private var replyAlert: MacMessageReplyAlert?
 
     init(
@@ -367,46 +454,29 @@ private struct MessageConversationPage: View {
         self.messages = messages
         _replyTransport = State(initialValue: replyTransport)
         _replyDictation = StateObject(wrappedValue: SpeechDictationService())
+        _draftBody = State(initialValue: controller.messageReplyDraft(for: conversation.id))
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelPageHeader(
-                title: "Back to Messages",
-                titleRole: .messages,
-                placement: .navigation,
-                onBack: controller.closeMessageConversation,
-                backHelp: "Back to Messages",
-                focusesBackOnAppear: true,
-                titleActsAsBackLabel: true
-            ) {
-                Text(
-                    conversation.isGroup
-                        ? "Read only"
-                        : "Messages handoff"
-                )
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.3))
-            }
-
             HStack(spacing: 10) {
-                MessageAvatarView(conversation: conversation, size: 30)
+                MessageAvatarView(conversation: conversation, size: 28)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(conversation.displayName)
-                        .font(.system(size: 12.5, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.94))
                         .lineLimit(1)
 
-                    Text("Messages from the last 14 days")
-                        .font(.system(size: 9, weight: .medium))
+                    Text(conversation.isGroup ? "Group conversation · Read only" : "Last 14 days")
+                        .font(.system(size: 8.5, weight: .medium))
                         .foregroundStyle(.white.opacity(0.36))
                 }
 
                 Spacer(minLength: 12)
             }
-            .padding(.horizontal, PanelPageLayout.contentInset)
-            .frame(height: 50)
+            .padding(.horizontal, 14)
+            .frame(height: MessageInboxLayout.detailHeaderHeight)
             .overlay(alignment: .bottom) {
                 Rectangle()
                     .fill(.white.opacity(0.055))
@@ -495,17 +565,17 @@ private struct MessageConversationPage: View {
                         controller.recoverLocalMessagesAccess()
                     }
                 )
-            case .confirm:
+            case let .fallbackRequired(message):
                 Alert(
                     title: Text("Open in Messages?"),
                     message: Text(
-                        "The selected recipient and this draft will be handed to macOS. If Messages opens, review them there; iAgent will not press Send and cannot verify that the compose window opened, the message was sent, or delivered."
+                        "\(message)\n\nYour draft stays in iAgent. Opening Messages is a separate fallback and will not send automatically."
                     ),
                     primaryButton: .cancel {
-                        pendingRequest = nil
+                        pendingFallbackRequest = nil
                     },
                     secondaryButton: .default(Text("Open Messages")) {
-                        beginConfirmedHandoff()
+                        beginConfirmedFallback()
                     }
                 )
             case let .notice(title, message):
@@ -521,40 +591,57 @@ private struct MessageConversationPage: View {
     @ViewBuilder
     private var replyComposer: some View {
         if conversation.isGroup {
-            HStack(spacing: 9) {
+            HStack(spacing: 8) {
                 Image(systemName: "person.2.slash")
+                    .font(.system(size: 11, weight: .medium))
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Group replies are not available yet")
-                        .fontWeight(.semibold)
-                    Text("Phase 1 supports one-to-one conversations only. This group stays read only.")
-                        .foregroundStyle(.white.opacity(0.3))
-                }
+                Text("Group replies are not available yet")
+                    .fontWeight(.medium)
 
                 Spacer(minLength: 10)
             }
-            .font(.system(size: 9.5, weight: .medium))
-            .foregroundStyle(.white.opacity(0.42))
-            .padding(.horizontal, PanelPageLayout.contentInset)
-            .frame(minHeight: 50)
+            .font(.system(size: 10, weight: .regular))
+            .foregroundStyle(.white.opacity(0.36))
+            .padding(.horizontal, 12)
+            .frame(height: MessageInboxLayout.composerHeight)
+            .background(
+                Color.white.opacity(0.035),
+                in: RoundedRectangle(
+                    cornerRadius: MessageInboxLayout.composerHeight / 2,
+                    style: .continuous
+                )
+            )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: MessageInboxLayout.composerHeight / 2,
+                    style: .continuous
+                )
+                .stroke(.white.opacity(0.055), lineWidth: 1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "Group replies are not available. Phase 1 supports one-to-one conversations only."
+            )
         } else {
-            HStack(alignment: .bottom, spacing: 4) {
-                TextField("iMessage", text: $draftBody, axis: .vertical)
+            HStack(spacing: 2) {
+                TextField(replyPlaceholder, text: $draftBody, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .lineLimit(1...3)
-                    .font(.system(size: 11.5, weight: .regular))
+                    .lineLimit(1)
+                    .font(.system(size: 11, weight: .regular))
                     .foregroundStyle(.white.opacity(0.94))
                     .focused($replyFieldFocused)
-                    .padding(.leading, 13)
-                    .padding(.vertical, 10)
+                    .padding(.leading, 12)
+                    .frame(height: MessageInboxLayout.composerHeight)
                     .onKeyPress(.return, phases: .down) { keyPress in
                         if keyPress.modifiers.contains(.shift) {
-                            return .ignored
+                            return .handled
                         }
                         guard keyPress.modifiers.intersection([.command, .control, .option]).isEmpty
                         else { return .ignored }
-                        if canAttemptHandoff {
-                            attemptHandoff()
+                        if canAttemptSend {
+                            attemptSend()
                         }
                         return .handled
                     }
@@ -565,10 +652,11 @@ private struct MessageConversationPage: View {
                             draftBody.prefix(MessageReplyRequest.maximumBodyCharacterCount)
                         )
                     }
+                    .onChange(of: draftBody) { _, draft in
+                        controller.storeMessageReplyDraft(draft, for: conversation.id)
+                    }
                     .accessibilityLabel("Message")
-                    .accessibilityHint(
-                        "Press Return to review in Messages. Press Shift-Return for a new line."
-                    )
+                    .accessibilityHint("Press Return to send.")
 
                 Button(action: performReplyAction) {
                     ZStack {
@@ -591,7 +679,10 @@ private struct MessageConversationPage: View {
                                 )
                         }
                     }
-                    .frame(width: 32, height: 32)
+                    .frame(
+                        width: MessageInboxLayout.composerActionSize,
+                        height: MessageInboxLayout.composerActionSize
+                    )
                     .background(
                         hasReplyDraft ? Color.agentBlue : Color.clear,
                         in: Circle()
@@ -600,30 +691,36 @@ private struct MessageConversationPage: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(replyActionIsBusy)
-                .help(hasReplyDraft ? "Review in Messages" : "Dictate a reply")
+                .help(hasReplyDraft ? "Send message" : "Dictate a reply")
                 .accessibilityLabel(
-                    hasReplyDraft ? "Review reply in Messages" : "Dictate a reply"
+                    hasReplyDraft ? "Send message" : "Dictate a reply"
                 )
                 .accessibilityHint(
                     hasReplyDraft
-                        ? "Continues with this draft in Apple's Messages composer"
+                        ? "Sends this reply through Messages"
                         : "Starts microphone dictation for this reply"
                 )
+                .opacity(replyActionIsBusy ? 0.78 : 1)
                 .padding(.trailing, 5)
-                .padding(.bottom, 4)
             }
-            .frame(minHeight: 44)
+            .frame(height: MessageInboxLayout.composerHeight)
             .background(
                 Color.white.opacity(0.06),
-                in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                in: RoundedRectangle(
+                    cornerRadius: MessageInboxLayout.composerHeight / 2,
+                    style: .continuous
+                )
             )
             .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(
+                    cornerRadius: MessageInboxLayout.composerHeight / 2,
+                    style: .continuous
+                )
                     .stroke(.white.opacity(replyFieldFocused ? 0.13 : 0.07), lineWidth: 1)
             }
             .animation(.easeOut(duration: 0.15), value: hasReplyDraft)
-            .padding(.horizontal, PanelPageLayout.contentInset)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
     }
 
@@ -644,14 +741,23 @@ private struct MessageConversationPage: View {
         !draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var replyActionIsBusy: Bool {
-        isResolvingRecipient || isStartingReplyDictation
+    private var replyPlaceholder: String {
+        switch MacMessageReplyService(serviceName: conversation.serviceName) {
+        case .iMessage:
+            "iMessage"
+        case .sms:
+            "Text Message"
+        }
     }
 
-    private var canAttemptHandoff: Bool {
+    private var replyActionIsBusy: Bool {
+        isResolvingRecipient || isSendingReply || isStartingReplyDictation
+    }
+
+    private var canAttemptSend: Bool {
         !conversation.isGroup
             && hasReplyDraft
-            && !isResolvingRecipient
+            && !replyActionIsBusy
     }
 
     private func reconcileRecipientSelection() {
@@ -665,7 +771,7 @@ private struct MessageConversationPage: View {
 
     private func performReplyAction() {
         if hasReplyDraft {
-            attemptHandoff()
+            attemptSend()
         } else {
             toggleReplyDictation()
         }
@@ -711,7 +817,7 @@ private struct MessageConversationPage: View {
         }
     }
 
-    private func attemptHandoff() {
+    private func attemptSend() {
         if replyDictation.isRecording {
             let transcript = replyDictation.stop()
             if !transcript.isEmpty {
@@ -720,14 +826,14 @@ private struct MessageConversationPage: View {
                 )
             }
         }
-        guard canAttemptHandoff else { return }
+        guard canAttemptSend else { return }
         beginRecipientResolution()
     }
 
     private func beginRecipientResolution() {
         guard !conversation.isGroup else { return }
         if selectedRecipients.count == 1 {
-            prepareHandoffConfirmation()
+            beginDirectSend()
             return
         }
 
@@ -763,7 +869,7 @@ private struct MessageConversationPage: View {
                 isResolvingRecipient = false
                 recipientResolutionTask = nil
                 if selectedRecipients.count == 1 {
-                    prepareHandoffConfirmation()
+                    beginDirectSend()
                 } else {
                     presentRecipientResolutionIssue()
                 }
@@ -799,29 +905,66 @@ private struct MessageConversationPage: View {
         "\(detail)\n\nYour draft stays here while iAgent remains open. If macOS requires a relaunch after you change Full Disk Access, copy the draft first, then retry after relaunch."
     }
 
-    private func prepareHandoffConfirmation() {
+    private func beginDirectSend() {
+        let request: MessageReplyRequest
         do {
-            pendingRequest = try MessageReplyRequest(
+            request = try MessageReplyRequest(
                 recipients: selectedRecipients,
                 body: draftBody
             )
-            replyAlert = .confirm
         } catch {
             replyAlert = .notice(
-                title: "Cannot prepare handoff",
+                title: "Cannot send message",
                 message: error.localizedDescription
             )
+            return
+        }
+
+        guard controller.beginMessageReplySend(for: conversation.id) else { return }
+        isSendingReply = true
+        let conversationID = conversation.id
+        let service = MacMessageReplyService(serviceName: conversation.serviceName)
+        Task { @MainActor in
+            defer {
+                isSendingReply = false
+                controller.finishMessageReplySend(for: conversationID)
+            }
+            do {
+                let result = try await replyTransport.sendUserInitiated(
+                    request,
+                    service: service
+                )
+                switch result {
+                case .sent:
+                    if draftBody == request.body {
+                        draftBody = ""
+                    }
+                case let .outcomeUncertain(message):
+                    replyAlert = .notice(
+                        title: "Check Messages before retrying",
+                        message: message
+                    )
+                case let .fallbackRequired(message):
+                    pendingFallbackRequest = request
+                    replyAlert = .fallbackRequired(message)
+                }
+            } catch {
+                replyAlert = .notice(
+                    title: "Message not sent",
+                    message: error.localizedDescription
+                )
+            }
         }
     }
 
-    private func beginConfirmedHandoff() {
-        guard let request = pendingRequest else { return }
-        defer { pendingRequest = nil }
+    private func beginConfirmedFallback() {
+        guard let request = pendingFallbackRequest else { return }
+        defer { pendingFallbackRequest = nil }
         do {
-            _ = try replyTransport.beginUserConfirmedHandoff(request)
+            _ = try replyTransport.beginUserConfirmedFallback(request)
         } catch {
             replyAlert = .notice(
-                title: "Messages handoff unavailable",
+                title: "Messages fallback unavailable",
                 message: error.localizedDescription
             )
         }
@@ -832,7 +975,7 @@ private struct MessageConversationPage: View {
 private enum MacMessageReplyAlert: Identifiable {
     case connectRequired(String)
     case accessRequired(String)
-    case confirm
+    case fallbackRequired(String)
     case notice(title: String, message: String)
 
     var id: String {
@@ -841,8 +984,8 @@ private enum MacMessageReplyAlert: Identifiable {
             "connect:\(message)"
         case let .accessRequired(message):
             "access:\(message)"
-        case .confirm:
-            "confirm"
+        case let .fallbackRequired(message):
+            "fallback:\(message)"
         case let .notice(title, message):
             "notice:\(title):\(message)"
         }

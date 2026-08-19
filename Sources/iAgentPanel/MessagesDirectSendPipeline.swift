@@ -1,0 +1,601 @@
+import Darwin
+import Foundation
+import SQLite3
+import iAgentCore
+
+enum MessagesDirectDispatchDisposition: Equatable, Sendable {
+  case accepted
+  case notStarted(errorNumber: Int, detail: String)
+  case outcomeUncertain(String)
+  case unavailable(String)
+}
+
+private struct MessagesAppleScriptCommand: Equatable, Sendable {
+  let source: String
+  let arguments: [String]
+}
+
+/// Runs a fixed AppleScript in a killable child process. User-controlled text
+/// exists only in argv; it is never code and never written to the script.
+struct MessagesAppleScriptExecutor: Sendable {
+  /// The first send may remain blocked while the user reads macOS's Automation
+  /// consent prompt. Keep that user-controlled path comfortable but finite.
+  static let timeout: TimeInterval = 60
+  static let executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+
+  static var isAvailable: Bool {
+    FileManager.default.isExecutableFile(atPath: executableURL.path)
+  }
+
+  static let scriptSource = """
+    on run argv
+        set dispatchPhase to "pre_dispatch"
+        try
+            set theRecipient to item 1 of argv
+            set theMessage to item 2 of argv
+            set theService to item 3 of argv
+            set targetChatID to item 4 of argv
+
+            tell application id "com.apple.MobileSMS"
+                if targetChatID is not "" then
+                    set targetChat to chat id targetChatID
+                    set dispatchPhase to "dispatch_started"
+                    send theMessage to targetChat
+                else
+                    if theService is "sms" then
+                        set targetService to first service whose service type is SMS
+                    else
+                        set targetService to first service whose service type is iMessage
+                    end if
+                    set targetBuddy to buddy theRecipient of targetService
+                    set dispatchPhase to "dispatch_started"
+                    send theMessage to targetBuddy
+                end if
+            end tell
+            return "IAGENT_RESULT" & tab & "ok" & tab & "completed" & tab & "0"
+        on error errorMessage number errorNumber
+            if dispatchPhase is "pre_dispatch" then
+                return "IAGENT_RESULT" & tab & "failure" & tab & "not_started" & tab & errorNumber
+            end if
+            return "IAGENT_RESULT" & tab & "failure" & tab & "may_have_completed" & tab & errorNumber
+        end try
+    end run
+    """
+
+  static func command(
+    recipient: String,
+    body: String,
+    service: MacMessageReplyService,
+    chatGUID: String?
+  ) -> (source: String, arguments: [String]) {
+    (
+      scriptSource,
+      [recipient, body, service.appleScriptValue, chatGUID ?? ""]
+    )
+  }
+
+  fileprivate func send(
+    recipient: String,
+    body: String,
+    service: MacMessageReplyService,
+    chatGUID: String?
+  ) -> MessagesDirectDispatchDisposition {
+    guard Self.isAvailable else {
+      return .unavailable("The bounded AppleScript runner is unavailable.")
+    }
+    let specification = Self.command(
+      recipient: recipient,
+      body: body,
+      service: service,
+      chatGUID: chatGUID
+    )
+    let command = MessagesAppleScriptCommand(
+      source: specification.source,
+      arguments: specification.arguments
+    )
+    return Self.run(command)
+  }
+
+  private static func run(
+    _ command: MessagesAppleScriptCommand
+  ) -> MessagesDirectDispatchDisposition {
+    let process = Process()
+    process.executableURL = executableURL
+    // This mirrors imsg's injection-safe argv boundary. A same-user process
+    // inspector can observe argv during the bounded child lifetime, so never
+    // log it and never persist it; the benefit is that user text is not code.
+    process.arguments = ["-l", "AppleScript", "-"] + command.arguments
+    let stdinPipe = Pipe()
+
+    let captureDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("iagent-messages-send-\(UUID().uuidString)", isDirectory: true)
+    let stdoutURL = captureDirectory.appendingPathComponent("stdout", isDirectory: false)
+    let stderrURL = captureDirectory.appendingPathComponent("stderr", isDirectory: false)
+
+    do {
+      try FileManager.default.createDirectory(
+        at: captureDirectory,
+        withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700]
+      )
+      guard FileManager.default.createFile(atPath: stdoutURL.path, contents: nil),
+            FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
+      else {
+        try? FileManager.default.removeItem(at: captureDirectory)
+        return .unavailable("The bounded AppleScript runner could not prepare output capture.")
+      }
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o600],
+        ofItemAtPath: stdoutURL.path
+      )
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o600],
+        ofItemAtPath: stderrURL.path
+      )
+    } catch {
+      try? FileManager.default.removeItem(at: captureDirectory)
+      return .unavailable("The bounded AppleScript runner could not prepare output capture.")
+    }
+    defer { try? FileManager.default.removeItem(at: captureDirectory) }
+
+    guard let stdoutHandle = FileHandle(forWritingAtPath: stdoutURL.path),
+          let stderrHandle = FileHandle(forWritingAtPath: stderrURL.path)
+    else {
+      return .unavailable("The bounded AppleScript runner could not open output capture.")
+    }
+    defer {
+      try? stdoutHandle.close()
+      try? stderrHandle.close()
+    }
+    process.standardInput = stdinPipe
+    process.standardOutput = stdoutHandle
+    process.standardError = stderrHandle
+
+    do {
+      try process.run()
+    } catch {
+      try? stdinPipe.fileHandleForWriting.close()
+      return .unavailable("The bounded AppleScript runner could not be launched.")
+    }
+
+    do {
+      try stdinPipe.fileHandleForWriting.write(contentsOf: Data(command.source.utf8))
+      try stdinPipe.fileHandleForWriting.close()
+    } catch {
+      terminateAndReap(process)
+      return .outcomeUncertain(
+        "The Messages automation input channel failed after launch. Do not retry automatically."
+      )
+    }
+
+    let deadline = Date().addingTimeInterval(timeout)
+    while process.isRunning, Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.02)
+    }
+    if process.isRunning {
+      terminateAndReap(process)
+      return .outcomeUncertain(
+        "Messages automation did not finish within \(Int(timeout)) seconds. It may still have sent the message; do not retry automatically."
+      )
+    }
+
+    process.waitUntilExit()
+    try? stdoutHandle.synchronize()
+    guard process.terminationReason == .exit, process.terminationStatus == 0 else {
+      return .outcomeUncertain(
+        "Messages automation exited without a trustworthy dispatch result. Do not retry automatically."
+      )
+    }
+
+    let output = (try? String(contentsOf: stdoutURL, encoding: .utf8)) ?? ""
+    return interpret(output)
+  }
+
+  private static func terminateAndReap(_ process: Process) {
+    guard process.isRunning else {
+      process.waitUntilExit()
+      return
+    }
+    process.terminate()
+    let graceDeadline = Date().addingTimeInterval(0.5)
+    while process.isRunning, Date() < graceDeadline {
+      Thread.sleep(forTimeInterval: 0.01)
+    }
+    if process.isRunning {
+      Darwin.kill(process.processIdentifier, SIGKILL)
+    }
+    process.waitUntilExit()
+  }
+
+  static func interpret(_ output: String) -> MessagesDirectDispatchDisposition {
+    let fields = output.trimmingCharacters(in: .whitespacesAndNewlines)
+      .split(separator: "\t", omittingEmptySubsequences: false)
+      .map(String.init)
+    guard fields.count == 4, fields[0] == "IAGENT_RESULT" else {
+      return .outcomeUncertain(
+        "Messages automation returned no trustworthy dispatch result. Do not retry automatically."
+      )
+    }
+    if fields[1] == "ok", fields[2] == "completed" {
+      return .accepted
+    }
+    let errorNumber = Int(fields[3]) ?? 0
+    if fields[2] == "not_started" {
+      return .notStarted(
+        errorNumber: errorNumber,
+        detail: "Messages automation did not start the send (AppleScript error \(errorNumber))."
+      )
+    }
+    return .outcomeUncertain(
+      "Messages automation failed after dispatch may have started (AppleScript error \(errorNumber)). Do not retry automatically."
+    )
+  }
+}
+
+struct MessagesOutgoingVerificationContext: Sendable {
+  let databaseURL: URL
+  let recipient: String
+  let service: MacMessageReplyService
+  let baselineRowID: Int64
+  let chatRowID: Int64?
+  let chatGUID: String?
+}
+
+struct MessagesOutgoingRow: Sendable {
+  let rowID: Int64
+  let guid: String?
+}
+
+struct MessagesOutgoingVerifier: Sendable {
+  static let defaultTimeout: TimeInterval = 8
+  let databaseURL: URL?
+  let verificationTimeout: TimeInterval
+
+  init(
+    databaseURL: URL?,
+    verificationTimeout: TimeInterval = Self.defaultTimeout
+  ) {
+    self.databaseURL = databaseURL
+    self.verificationTimeout = max(0, verificationTimeout)
+  }
+
+  func prepare(
+    recipient: String,
+    service: MacMessageReplyService
+  ) -> MessagesOutgoingVerificationContext? {
+    guard let databaseURL,
+          let database = try? Self.openReadOnlyDatabase(at: databaseURL)
+    else { return nil }
+    defer { sqlite3_close(database) }
+
+    guard let baselineRowID = try? Self.maximumMessageRowID(in: database) else {
+      return nil
+    }
+    let chat = try? Self.resolveDirectChat(
+      recipient: recipient,
+      service: service,
+      in: database
+    )
+    return MessagesOutgoingVerificationContext(
+      databaseURL: databaseURL,
+      recipient: recipient,
+      service: service,
+      baselineRowID: baselineRowID,
+      chatRowID: chat?.rowID,
+      chatGUID: chat?.guid
+    )
+  }
+
+  func verify(
+    body: String,
+    context: MessagesOutgoingVerificationContext
+  ) -> MessagesOutgoingRow? {
+    guard let database = try? Self.openReadOnlyDatabase(at: context.databaseURL) else {
+      return nil
+    }
+    defer { sqlite3_close(database) }
+
+    let deadline = Date().addingTimeInterval(verificationTimeout)
+    repeat {
+      var resolvedChatRowID = context.chatRowID
+      if resolvedChatRowID == nil,
+         let refreshedChat = try? Self.resolveDirectChat(
+           recipient: context.recipient,
+           service: context.service,
+           in: database
+         )
+      {
+        resolvedChatRowID = refreshedChat.rowID
+      }
+      if let chatRowID = resolvedChatRowID {
+        do {
+          if let row = try Self.matchingOutgoingRow(
+            body: body,
+            chatRowID: chatRowID,
+            afterRowID: context.baselineRowID,
+            in: database
+          ) {
+            return row
+          }
+        } catch {
+          return nil
+        }
+      }
+      Thread.sleep(forTimeInterval: 0.1)
+    } while Date() < deadline
+    return nil
+  }
+
+  private static func openReadOnlyDatabase(at url: URL) throws -> OpaquePointer {
+    var database: OpaquePointer?
+    let flags = Int32(SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX)
+    let result = sqlite3_open_v2(url.path, &database, flags, nil)
+    guard result == SQLITE_OK, let database else {
+      if let database { sqlite3_close(database) }
+      throw MacMessageReplyTransportError.serviceUnavailable
+    }
+    sqlite3_busy_timeout(database, 500)
+    guard sqlite3_exec(database, "PRAGMA query_only = ON", nil, nil, nil) == SQLITE_OK else {
+      sqlite3_close(database)
+      throw MacMessageReplyTransportError.serviceUnavailable
+    }
+    return database
+  }
+
+  private static func maximumMessageRowID(in database: OpaquePointer) throws -> Int64 {
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(
+      database,
+      "SELECT COALESCE(MAX(ROWID), 0) FROM message",
+      -1,
+      &statement,
+      nil
+    ) == SQLITE_OK,
+      let statement
+    else { throw MacMessageReplyTransportError.serviceUnavailable }
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_step(statement) == SQLITE_ROW else {
+      throw MacMessageReplyTransportError.serviceUnavailable
+    }
+    return sqlite3_column_int64(statement, 0)
+  }
+
+  private static func resolveDirectChat(
+    recipient: String,
+    service: MacMessageReplyService,
+    in database: OpaquePointer
+  ) throws -> (rowID: Int64, guid: String?)? {
+    guard let expectedAddress = MessageReplyAddress(recipient) else { return nil }
+    let sql = """
+      SELECT
+        c.ROWID,
+        COALESCE(c.guid, ''),
+        COALESCE(h.id, ''),
+        COALESCE(c.chat_identifier, ''),
+        COUNT(DISTINCT chj.handle_id)
+      FROM chat c
+      LEFT JOIN chat_handle_join chj ON chj.chat_id = c.ROWID
+      LEFT JOIN handle h ON h.ROWID = chj.handle_id
+      LEFT JOIN chat_message_join cmj ON cmj.chat_id = c.ROWID
+      LEFT JOIN message latest ON latest.ROWID = cmj.message_id
+      WHERE COALESCE(c.style, 0) != 43
+      GROUP BY c.ROWID
+      ORDER BY
+        CASE WHEN lower(COALESCE(c.service_name, '')) = lower(?1) THEN 0 ELSE 1 END,
+        MAX(COALESCE(latest.date, 0)) DESC,
+        c.ROWID DESC
+      """
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+          let statement
+    else { throw MacMessageReplyTransportError.serviceUnavailable }
+    defer { sqlite3_finalize(statement) }
+    bind(service.rawValue, at: 1, in: statement)
+
+    while sqlite3_step(statement) == SQLITE_ROW {
+      let memberCount = sqlite3_column_int64(statement, 4)
+      guard memberCount <= 1 else { continue }
+      let handle = string(at: 2, in: statement) ?? ""
+      let chatIdentifier = string(at: 3, in: statement) ?? ""
+      guard [handle, chatIdentifier].contains(where: {
+        routingAddress($0, matches: expectedAddress)
+      }) else { continue }
+
+      let guid = string(at: 1, in: statement)
+      return (
+        sqlite3_column_int64(statement, 0),
+        guid?.isEmpty == false ? guid : nil
+      )
+    }
+    return nil
+  }
+
+  private static func routingAddress(
+    _ rawValue: String,
+    matches expected: MessageReplyAddress
+  ) -> Bool {
+    guard let candidate = MessageReplyAddress(rawValue) else { return false }
+    guard candidate.kind == expected.kind else { return false }
+    switch candidate.kind {
+    case .phone:
+      return candidate.value == expected.value
+    case .email:
+      return candidate.value.caseInsensitiveCompare(expected.value) == .orderedSame
+    }
+  }
+
+  private static func matchingOutgoingRow(
+    body: String,
+    chatRowID: Int64,
+    afterRowID: Int64,
+    in database: OpaquePointer
+  ) throws -> MessagesOutgoingRow? {
+    let messageColumns = try columns(in: "message", database: database)
+    let plainTextExpression = messageColumns.contains("text") ? "m.text" : "NULL"
+    let attributedBodyExpression = messageColumns.contains("attributedBody")
+      ? "m.attributedBody"
+      : "NULL"
+    guard plainTextExpression != "NULL" || attributedBodyExpression != "NULL" else {
+      return nil
+    }
+    let sql = """
+      SELECT
+        m.ROWID,
+        COALESCE(m.guid, ''),
+        \(plainTextExpression),
+        \(attributedBodyExpression)
+      FROM message m
+      JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+      WHERE cmj.chat_id = ?1
+        AND m.ROWID > ?2
+        AND COALESCE(m.is_from_me, 0) = 1
+      ORDER BY m.ROWID ASC
+      """
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+          let statement
+    else { throw MacMessageReplyTransportError.serviceUnavailable }
+    defer { sqlite3_finalize(statement) }
+    sqlite3_bind_int64(statement, 1, chatRowID)
+    sqlite3_bind_int64(statement, 2, afterRowID)
+
+    while sqlite3_step(statement) == SQLITE_ROW {
+      let plainText = string(at: 2, in: statement)
+      let attributedText = MessageAttributedBodyDecoder.decode(
+        data(at: 3, in: statement)
+      )
+      guard [plainText, attributedText].compactMap({ $0 }).contains(body) else {
+        continue
+      }
+      let guid = string(at: 1, in: statement)
+      return MessagesOutgoingRow(
+        rowID: sqlite3_column_int64(statement, 0),
+        guid: guid?.isEmpty == false ? guid : nil
+      )
+    }
+    return nil
+  }
+
+  private static func columns(
+    in table: String,
+    database: OpaquePointer
+  ) throws -> Set<String> {
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(
+      database,
+      "PRAGMA table_info(\(table))",
+      -1,
+      &statement,
+      nil
+    ) == SQLITE_OK,
+      let statement
+    else { throw MacMessageReplyTransportError.serviceUnavailable }
+    defer { sqlite3_finalize(statement) }
+
+    var result = Set<String>()
+    while sqlite3_step(statement) == SQLITE_ROW {
+      if let name = string(at: 1, in: statement) {
+        result.insert(name)
+      }
+    }
+    return result
+  }
+
+  private static let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+  private static func bind(_ value: String, at index: Int32, in statement: OpaquePointer) {
+    _ = value.withCString { pointer in
+      sqlite3_bind_text(statement, index, pointer, -1, sqliteTransient)
+    }
+  }
+
+  private static func string(at index: Int32, in statement: OpaquePointer) -> String? {
+    guard let text = sqlite3_column_text(statement, index) else { return nil }
+    return String(cString: text)
+  }
+
+  private static func data(at index: Int32, in statement: OpaquePointer) -> Data? {
+    guard sqlite3_column_type(statement, index) != SQLITE_NULL,
+          let bytes = sqlite3_column_blob(statement, index)
+    else { return nil }
+    let count = Int(sqlite3_column_bytes(statement, index))
+    guard count > 0 else { return nil }
+    return Data(bytes: bytes, count: count)
+  }
+}
+
+struct MessagesDirectSendPipeline: Sendable {
+  private static let automationDeniedError = -1743
+  private static let unavailableErrors: Set<Int> = [-600, -609, -10814]
+
+  let databaseURL: URL?
+
+  func send(
+    _ request: MessageReplyRequest,
+    service: MacMessageReplyService
+  ) throws -> MacMessageReplySendResult {
+    let payload = try DirectMessagesReplyTransport.payload(for: request)
+    let verifier = MessagesOutgoingVerifier(databaseURL: databaseURL)
+    let verification = verifier.prepare(
+      recipient: payload.recipient,
+      service: service
+    )
+    let dispatch = MessagesAppleScriptExecutor().send(
+      recipient: payload.recipient,
+      body: payload.body,
+      service: service,
+      chatGUID: verification?.chatGUID
+    )
+
+    switch dispatch {
+    case .accepted:
+      guard let verification else {
+        return .outcomeUncertain(
+          "Messages accepted the send, but its outgoing database was unavailable for verification. The message may have sent; do not retry automatically."
+        )
+      }
+      guard let row = verifier.verify(body: payload.body, context: verification) else {
+        return .outcomeUncertain(
+          "Messages accepted the send, but no matching outgoing row appeared within \(Int(MessagesOutgoingVerifier.defaultTimeout)) seconds. The message may have sent; do not retry automatically."
+        )
+      }
+      return .sent(
+        MacMessageReplySendReceipt(
+          rowID: row.rowID,
+          guid: row.guid,
+          service: service
+        )
+      )
+
+    case .notStarted(let errorNumber, let detail):
+      return Self.notStartedResult(errorNumber: errorNumber, detail: detail)
+
+    case .outcomeUncertain(let message):
+      return .outcomeUncertain(message)
+
+    case .unavailable(let message):
+      return .fallbackRequired(
+        "\(message) You can open this draft in Messages instead."
+      )
+    }
+  }
+
+  static func notStartedResult(
+    errorNumber: Int,
+    detail: String
+  ) -> MacMessageReplySendResult {
+    if errorNumber == Self.automationDeniedError {
+      return .fallbackRequired(
+        "Automation access to Messages was denied. Allow iAgent in System Settings > Privacy & Security > Automation, or open this draft in Messages instead."
+      )
+    }
+    if Self.unavailableErrors.contains(errorNumber) {
+      return .fallbackRequired(
+        "Messages automation is unavailable right now. You can open this draft in Messages instead."
+      )
+    }
+    return .fallbackRequired(
+      "\(detail) The direct send did not start, so you can open this draft in Messages instead."
+    )
+  }
+}

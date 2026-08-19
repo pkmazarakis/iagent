@@ -39,9 +39,10 @@ final class PanelPageChromeTests: XCTestCase {
     XCTAssertFalse(app.contains(backChevron))
     XCTAssertFalse(messages.contains(backChevron))
     XCTAssertTrue(app.contains("PanelPageHeader("))
-    XCTAssertTrue(messages.contains("PanelPageHeader("))
-    XCTAssertTrue(messages.contains("focusesBackOnAppear: true"))
-    XCTAssertTrue(messages.contains("titleActsAsBackLabel: true"))
+    XCTAssertFalse(messages.contains("PanelPageHeader("))
+    XCTAssertTrue(messages.contains("private var splitInbox"))
+    XCTAssertTrue(messages.contains("MessageInboxLayout.sidebarWidth"))
+    XCTAssertTrue(messages.contains("Show this conversation alongside the inbox"))
   }
 
   func testSemanticContentEdgesUseTheSharedInsetToken() throws {

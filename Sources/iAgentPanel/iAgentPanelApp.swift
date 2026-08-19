@@ -545,6 +545,7 @@ final class PanelController: ObservableObject {
     @Published private(set) var messageProviderAccess: MessageProviderAccessState = .loading
     @Published private(set) var messageProviderBackfillInFlight = false
     @Published private(set) var messageReplyTransportEnabled = false
+    @Published private(set) var messageReplySendInFlightConversationID: String?
     @Published var selectedMessageConversationID: String?
     @Published var messageInboxFilter: MessageInboxFilter = .all
     private var messageInboxIndex = MessageInboxIndex()
@@ -601,6 +602,7 @@ final class PanelController: ObservableObject {
     private var cloudSyncStatusRefreshGeneration = 0
     private var messageProviderTask: Task<Void, Never>?
     private var messageProviderRefreshGeneration = 0
+    private var messageReplyDraftsByConversationID: [String: String] = [:]
     private var todosAreAuthoritative = true
     private var todoListNamesAreAuthoritative = true
     private var todoFileIssue: String?
@@ -1977,6 +1979,7 @@ final class PanelController: ObservableObject {
     }
 
     func showMessages() {
+        guard messageReplySendInFlightConversationID == nil else { return }
         contentMode = .messages
         selectedMessageConversationID = nil
         messageInboxFilter = .all
@@ -1985,6 +1988,9 @@ final class PanelController: ObservableObject {
     }
 
     func selectMessageConversation(_ conversationID: String) {
+        guard messageReplySendInFlightConversationID == nil
+                || messageReplySendInFlightConversationID == conversationID
+        else { return }
         selectedMessageConversationID = conversationID
         guard let latest = retainedMessages(for: conversationID).last else { return }
         applyMessageReadStateLocally(conversationID: conversationID, through: latest)
@@ -1999,7 +2005,33 @@ final class PanelController: ObservableObject {
     }
 
     func closeMessageConversation() {
+        guard messageReplySendInFlightConversationID == nil else { return }
         selectedMessageConversationID = nil
+    }
+
+    func beginMessageReplySend(for conversationID: String) -> Bool {
+        guard messageReplySendInFlightConversationID == nil,
+              selectedMessageConversationID == conversationID
+        else { return false }
+        messageReplySendInFlightConversationID = conversationID
+        return true
+    }
+
+    func finishMessageReplySend(for conversationID: String) {
+        guard messageReplySendInFlightConversationID == conversationID else { return }
+        messageReplySendInFlightConversationID = nil
+    }
+
+    func messageReplyDraft(for conversationID: String) -> String {
+        messageReplyDraftsByConversationID[conversationID] ?? ""
+    }
+
+    func storeMessageReplyDraft(_ draft: String, for conversationID: String) {
+        if draft.isEmpty {
+            messageReplyDraftsByConversationID.removeValue(forKey: conversationID)
+        } else {
+            messageReplyDraftsByConversationID[conversationID] = draft
+        }
     }
 
     func navigateBackFromMessages() {
@@ -2893,6 +2925,7 @@ final class PanelController: ObservableObject {
     }
 
     func returnHome() {
+        guard messageReplySendInFlightConversationID == nil else { return }
         guard flushCurrentEditorIfNeeded() else { return }
         resetMeetingNotePresentation()
         dictation.cancel()
@@ -2920,6 +2953,9 @@ final class PanelController: ObservableObject {
     var navigationBackHelp: String {
         if case .todoDetail = contentMode {
             return showingPastTodos ? "Back to past todos" : "Back to todos"
+        }
+        if contentMode == .messages, selectedMessageConversationID != nil {
+            return "Back to Messages"
         }
         return "Back to Home"
     }
@@ -3804,6 +3840,7 @@ final class PanelController: ObservableObject {
                 animated: true
             )
         } else {
+            guard messageReplySendInFlightConversationID == nil else { return }
             hidePanelCompletely(animated: true)
         }
     }
@@ -3976,6 +4013,11 @@ final class PanelController: ObservableObject {
         source: String,
         animated: Bool
     ) {
+        if messageReplySendInFlightConversationID != nil,
+           nextPresentation != .expanded
+        {
+            return
+        }
         if isPanelHidden {
             showPanelFromHidden(
                 to: nextPresentation,
@@ -6761,8 +6803,7 @@ struct ExpandedPanel: View {
 
     private var headerBackAction: (() -> Void)? {
         guard controller.contentMode != .home,
-              !(controller.contentMode == .messages
-                && controller.selectedMessageConversationID != nil)
+              controller.messageReplySendInFlightConversationID == nil
         else {
             return nil
         }

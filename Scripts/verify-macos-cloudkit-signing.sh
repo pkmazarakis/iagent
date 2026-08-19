@@ -59,6 +59,8 @@ plist_contains "$ENTITLEMENTS_PLIST" com.apple.developer.icloud-container-identi
   || fail "app is not entitled for $EXPECTED_CONTAINER"
 APP_ADDRESSBOOK="$(plist_value "$ENTITLEMENTS_PLIST" com.apple.security.personal-information.addressbook || true)"
 [[ "$APP_ADDRESSBOOK" == "true" ]] || fail "Contacts entitlement is missing"
+APP_AUTOMATION="$(plist_value "$ENTITLEMENTS_PLIST" com.apple.security.automation.apple-events || true)"
+[[ "$APP_AUTOMATION" == "true" ]] || fail "Apple Events automation entitlement is missing"
 if [[ "${IAGENT_REQUIRE_APP_SANDBOX:-0}" == "1" ]]; then
   APP_SANDBOX="$(plist_value "$ENTITLEMENTS_PLIST" com.apple.security.app-sandbox || true)"
   APP_AUDIO_INPUT="$(plist_value "$ENTITLEMENTS_PLIST" com.apple.security.device.audio-input || true)"
@@ -68,10 +70,20 @@ if [[ "${IAGENT_REQUIRE_APP_SANDBOX:-0}" == "1" ]]; then
   [[ "$APP_AUDIO_INPUT" == "true" ]] || fail "Audio Input entitlement is missing"
   [[ "$APP_USER_SELECTED_RW" == "true" ]] || fail "user-selected read/write entitlement is missing"
   [[ "$APP_BOOKMARKS" == "true" ]] || fail "app-scoped bookmark entitlement is missing"
+  APP_MESSAGES_AUTOMATION_TARGET="$(plist_value "$ENTITLEMENTS_PLIST" com.apple.security.temporary-exception.apple-events:0 || true)"
+  APP_CALENDAR_AUTOMATION_TARGET="$(plist_value "$ENTITLEMENTS_PLIST" com.apple.security.temporary-exception.apple-events:1 || true)"
+  APP_EXTRA_AUTOMATION_TARGET="$(plist_value "$ENTITLEMENTS_PLIST" com.apple.security.temporary-exception.apple-events:2 || true)"
+  [[ "$APP_MESSAGES_AUTOMATION_TARGET" == "com.apple.MobileSMS" ]] \
+    || fail "Messages sandbox Apple Events target is missing or out of order"
+  [[ "$APP_CALENDAR_AUTOMATION_TARGET" == "com.apple.iCal" ]] \
+    || fail "Calendar sandbox Apple Events target is missing or out of order"
+  [[ -z "$APP_EXTRA_AUTOMATION_TARGET" ]] \
+    || fail "sandbox Apple Events targets contain an unexpected app"
 fi
 
 for usage_key in NSMicrophoneUsageDescription NSSpeechRecognitionUsageDescription \
-  NSScreenCaptureUsageDescription NSAudioCaptureUsageDescription NSContactsUsageDescription; do
+  NSScreenCaptureUsageDescription NSAudioCaptureUsageDescription NSContactsUsageDescription \
+  NSAppleEventsUsageDescription; do
   usage_value="$(plist_value "$APP/Contents/Info.plist" "$usage_key" || true)"
   [[ -n "$usage_value" ]] || fail "$usage_key is missing from the signed app"
 done

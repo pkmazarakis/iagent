@@ -34,8 +34,8 @@ plist_nonempty() {
   || fail "unexpected bundle identifier"
 plist_nonempty CFBundleShortVersionString
 BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO")"
-[[ "$BUILD_NUMBER" == <-> && "$BUILD_NUMBER" -gt 17 ]] \
-  || fail "CFBundleVersion must be an integer greater than uploaded build 17"
+[[ "$BUILD_NUMBER" == <-> && "$BUILD_NUMBER" -gt 18 ]] \
+  || fail "CFBundleVersion must be an integer greater than uploaded build 18"
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :LSApplicationCategoryType' "$INFO")" == "$EXPECTED_CATEGORY" ]] \
   || fail "LSApplicationCategoryType must be $EXPECTED_CATEGORY"
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$INFO")" == "$EXPECTED_ICON" ]] \
@@ -48,6 +48,7 @@ plist_nonempty NSScreenCaptureUsageDescription
 plist_nonempty NSAudioCaptureUsageDescription
 plist_nonempty NSCalendarsFullAccessUsageDescription
 plist_nonempty NSContactsUsageDescription
+plist_nonempty NSAppleEventsUsageDescription
 
 [[ -f "$ICON_SOURCE" ]] || fail "$EXPECTED_ICON is missing"
 /usr/bin/iconutil -c iconset -o "$ICON_CHECK_ROOT/iAgentPanel.iconset" "$ICON_SOURCE" \
@@ -71,6 +72,17 @@ ICON_2X="$ICON_CHECK_ROOT/iAgentPanel.iconset/icon_512x512@2x.png"
   || fail "app-scoped security bookmarks are required for persistent folder access"
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.network.client' "$ENTITLEMENTS")" == "true" ]] \
   || fail "outbound network access is required for CloudKit"
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.automation.apple-events' "$ENTITLEMENTS")" == "true" ]] \
+  || fail "Apple Events automation entitlement is required for direct Messages sends"
+MESSAGES_AUTOMATION_TARGET="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.temporary-exception.apple-events:0' "$ENTITLEMENTS" 2>/dev/null || true)"
+CALENDAR_AUTOMATION_TARGET="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.temporary-exception.apple-events:1' "$ENTITLEMENTS" 2>/dev/null || true)"
+EXTRA_AUTOMATION_TARGET="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.temporary-exception.apple-events:2' "$ENTITLEMENTS" 2>/dev/null || true)"
+[[ "$MESSAGES_AUTOMATION_TARGET" == "com.apple.MobileSMS" ]] \
+  || fail "Messages must be the first sandbox Apple Events target"
+[[ "$CALENDAR_AUTOMATION_TARGET" == "com.apple.iCal" ]] \
+  || fail "Calendar must remain the second sandbox Apple Events target"
+[[ -z "$EXTRA_AUTOMATION_TARGET" ]] \
+  || fail "sandbox Apple Events targets must be limited to Messages and Calendar"
 ENTITLEMENT_TEXT="$(plutil -p "$ENTITLEMENTS")"
 [[ "$ENTITLEMENT_TEXT" == *"$EXPECTED_CONTAINER"* ]] || fail "CloudKit container is missing"
 [[ "$ENTITLEMENT_TEXT" == *'"Production"'* ]] || fail "CloudKit Production is missing"

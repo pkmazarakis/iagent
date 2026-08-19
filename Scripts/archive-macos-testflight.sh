@@ -79,7 +79,8 @@ ARCHIVED_INFO_PLIST="$ARCHIVED_APP/Contents/Info.plist"
 [[ -s "$EMBEDDED_INFO_PLIST" ]] || fail "could not extract the executable's embedded Info.plist"
 /usr/bin/plutil -lint "$EMBEDDED_INFO_PLIST" >/dev/null \
   || fail "the executable's embedded Info.plist is invalid"
-for metadata_key in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion; do
+for metadata_key in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion \
+  NSAppleEventsUsageDescription; do
   expected_value="$(/usr/libexec/PlistBuddy -c "Print :$metadata_key" "$ROOT/Sources/iAgentPanel/Info.plist")"
   external_value="$(/usr/libexec/PlistBuddy -c "Print :$metadata_key" "$ARCHIVED_INFO_PLIST")"
   embedded_value="$(/usr/libexec/PlistBuddy -c "Print :$metadata_key" "$EMBEDDED_INFO_PLIST")"
@@ -88,13 +89,22 @@ for metadata_key in CFBundleIdentifier CFBundleShortVersionString CFBundleVersio
   [[ "$embedded_value" == "$expected_value" ]] \
     || fail "$metadata_key in the executable does not match the release source"
 done
-for compiled_marker in HomeMessageMoreIcon NotesListView MessageInboxView PanelPageHeader PanelTooltipPresenter; do
+for compiled_marker in HomeMessageMoreIcon NotesListView MessageInboxView PanelPageHeader \
+  PanelTooltipPresenter DirectMessagesReplyTransport MessagesDirectSendPipeline \
+  MessageDetailRevealModifier; do
   # Swift metadata strings can carry a printable length-prefix byte (for example,
   # `?MessageInboxView`), so require a symbol boundary instead of byte-for-byte text.
   /usr/bin/strings "$ARCHIVED_EXECUTABLE" \
     | /usr/bin/grep -E "(^|[^[:alnum:]_])${compiled_marker}$" >/dev/null \
     || fail "compiled desktop marker is missing: $compiled_marker"
 done
+/usr/bin/strings "$ARCHIVED_EXECUTABLE" \
+  | /usr/bin/grep -F 'Select a conversation' >/dev/null \
+  || fail "compiled split Messages detail placeholder is missing"
+if /usr/bin/strings "$ARCHIVED_EXECUTABLE" \
+  | /usr/bin/grep -F 'Refreshing reply recipients' >/dev/null; then
+  fail "obsolete blocking reply-recipient UI is still compiled"
+fi
 /usr/bin/strings "$ARCHIVED_EXECUTABLE" \
   | /usr/bin/grep -F 'Expected the collapsed panel to match the menu bar height.' >/dev/null \
   || fail "compiled physical-top compact-panel assertion is missing"

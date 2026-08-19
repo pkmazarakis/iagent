@@ -21,7 +21,7 @@
   <key>CFBundleShortVersionString</key>
   <string>0.2.0</string>
   <key>CFBundleVersion</key>
-  <string>18</string>
+  <string>19</string>
   <key>CFBundleURLTypes</key>
   <array>
     <dict>
@@ -56,7 +56,7 @@
   <key>NSContactsUsageDescription</key>
   <string>iAgent uses Contacts only to show names for message participants you sync from this Mac.</string>
   <key>NSAppleEventsUsageDescription</key>
-  <string>iAgent reads saved meeting links from today’s Apple Calendar events so you can join them from the panel.</string>
+  <string>iAgent sends a message through Apple Messages only after you press Send, and reads saved meeting links from today’s Apple Calendar events.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>iAgent uses speech recognition to turn live dictation and meetings you explicitly record into local notes.</string>
 </dict>

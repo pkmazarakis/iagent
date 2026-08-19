@@ -16,6 +16,13 @@
   <true/>
   <key>com.apple.security.network.client</key>
   <true/>
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
+  <key>com.apple.security.temporary-exception.apple-events</key>
+  <array>
+    <string>com.apple.MobileSMS</string>
+    <string>com.apple.iCal</string>
+  </array>
   <key>com.apple.developer.aps-environment</key>
   <string>production</string>
   <key>com.apple.application-identifier</key>

@@ -619,17 +619,20 @@ final class MessageInboxProviderTests: XCTestCase {
     )
   }
 
-  func testMessageInboxVisualContractUsesTodoStyleSearchAndStableMetadataSlots() throws {
+  func testMessageInboxVisualContractUsesPersistentSplitSidebarAndCompactRows() throws {
     XCTAssertEqual(PanelPageLayout.contentInset, 20)
+    XCTAssertEqual(MessageInboxLayout.sidebarWidth, 268)
+    XCTAssertEqual(MessageInboxLayout.conversationRowHeight, 58)
+    XCTAssertEqual(MessageInboxLayout.detailHeaderHeight, 46)
+    XCTAssertEqual(MessageInboxLayout.composerHeight, 38)
+    XCTAssertEqual(MessageInboxLayout.composerActionSize, 28)
+    XCTAssertEqual(MessageInboxLayout.detailRevealDuration, 0.22)
     XCTAssertEqual(MessageInboxLayout.searchAccessorySize, 24)
     XCTAssertEqual(MessageInboxLayout.searchVerticalInset, 8)
     XCTAssertEqual(MessageInboxLayout.searchRowHeight, 40)
     XCTAssertEqual(MessageInboxLayout.searchFontSize, 12)
     XCTAssertEqual(PanelPageLayout.headerLeadingInset, 10)
     XCTAssertEqual(PanelPageLayout.headerItemSpacing, 8)
-    XCTAssertEqual(MessageInboxLayout.metadataGap, 20)
-    XCTAssertEqual(MessageInboxLayout.metadataWidth, 90)
-    XCTAssertEqual(MessageInboxLayout.relativeTimeWidth, 22)
 
     let repositoryRoot = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
@@ -655,10 +658,12 @@ final class MessageInboxProviderTests: XCTestCase {
     )
     XCTAssertTrue(searchImplementation.contains(".background(ExpandedPanelBackground())"))
     XCTAssertTrue(
-      source.contains(
-        ".frame(width: MessageInboxLayout.relativeTimeWidth, alignment: .leading)"
-      )
+      source.contains(".frame(width: MessageInboxLayout.sidebarWidth)")
     )
+    XCTAssertTrue(source.contains("isSelected: controller.selectedMessageConversationID"))
+    XCTAssertTrue(source.contains(".frame(height: MessageInboxLayout.conversationRowHeight)"))
+    XCTAssertTrue(source.contains(".id(selectedConversation.id)"))
+    XCTAssertTrue(source.contains(".transition(detailTransition)"))
   }
 
   @MainActor
@@ -671,6 +676,32 @@ final class MessageInboxProviderTests: XCTestCase {
     XCTAssertEqual(controller.compactSize.width, 593)
     XCTAssertEqual(controller.notchSize.width, 210)
     XCTAssertEqual(controller.expandedSize.width, 760)
+  }
+
+  @MainActor
+  func testInFlightMessageSendKeepsSelectionAndPerConversationDraftStable() {
+    let controller = PanelController(
+      smokeTest: true,
+      preferences: isolatedPreferences()
+    )
+    controller.selectedMessageConversationID = "conversation-a"
+    controller.storeMessageReplyDraft("unsent draft", for: "conversation-a")
+
+    XCTAssertTrue(controller.beginMessageReplySend(for: "conversation-a"))
+    XCTAssertFalse(controller.beginMessageReplySend(for: "conversation-b"))
+
+    controller.selectMessageConversation("conversation-b")
+    XCTAssertEqual(controller.selectedMessageConversationID, "conversation-a")
+    controller.closeMessageConversation()
+    XCTAssertEqual(controller.selectedMessageConversationID, "conversation-a")
+    XCTAssertEqual(
+      controller.messageReplyDraft(for: "conversation-a"),
+      "unsent draft"
+    )
+
+    controller.finishMessageReplySend(for: "conversation-a")
+    controller.closeMessageConversation()
+    XCTAssertNil(controller.selectedMessageConversationID)
   }
 
   func testFullDiskAccessSettingsURLTargetsModernPrivacySettingsExtension() throws {
