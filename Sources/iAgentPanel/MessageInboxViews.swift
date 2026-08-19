@@ -344,15 +344,17 @@ private struct MessageConversationPage: View {
     let conversation: SyncedMessageConversation
     let messages: [SyncedMessage]
     @State private var replyTransport: any MacMessageReplyTransport
+    @StateObject private var replyDictation: SpeechDictationService
+    @FocusState private var replyFieldFocused: Bool
     @State private var draftBody = ""
     @State private var selectedRecipientIDs = Set<String>()
     @State private var resolvedRecipients: [MessageReplyRecipient] = []
     @State private var isResolvingRecipient = false
+    @State private var isStartingReplyDictation = false
     @State private var retryAfterMessagesAccess = false
     @State private var recipientResolutionTask: Task<Void, Never>?
     @State private var pendingRequest: MessageReplyRequest?
     @State private var replyAlert: MacMessageReplyAlert?
-    @State private var replyStatusMessage: String?
 
     init(
         controller: PanelController,
@@ -364,6 +366,7 @@ private struct MessageConversationPage: View {
         self.conversation = conversation
         self.messages = messages
         _replyTransport = State(initialValue: replyTransport)
+        _replyDictation = StateObject(wrappedValue: SpeechDictationService())
     }
 
     var body: some View {
@@ -428,6 +431,17 @@ private struct MessageConversationPage: View {
         .onChange(of: eligibleRecipients.map(\.id)) {
             reconcileRecipientSelection()
         }
+        .onChange(of: replyDictation.transcript) { _, transcript in
+            guard replyDictation.isRecording else { return }
+            draftBody = String(
+                transcript.prefix(MessageReplyRequest.maximumBodyCharacterCount)
+            )
+        }
+        .onChange(of: replyDictation.errorMessage) { _, message in
+            guard let message, !message.isEmpty else { return }
+            isStartingReplyDictation = false
+            replyAlert = .notice(title: "Voice input unavailable", message: message)
+        }
         .onChange(of: controller.messageProviderAccess) {
             guard retryAfterMessagesAccess else { return }
             switch controller.messageProviderAccess {
@@ -454,24 +468,11 @@ private struct MessageConversationPage: View {
         .onDisappear {
             recipientResolutionTask?.cancel()
             recipientResolutionTask = nil
+            replyDictation.cancel()
+            isStartingReplyDictation = false
         }
         .alert(item: $replyAlert) { alert in
             switch alert {
-            case .enable:
-                Alert(
-                    title: Text("Enable Messages handoff?"),
-                    message: Text(
-                        "This setting applies to every eligible one-to-one conversation in your rolling 14-day Messages inbox. iAgent will include validated recipient addresses in your private iCloud message projection so replies can also be prepared on iPhone. Every draft is handed to Apple's Messages UI for review; iAgent never presses Send or confirms delivery."
-                    ),
-                    primaryButton: .cancel(),
-                    secondaryButton: .default(Text("Continue")) {
-                        controller.setMessageReplyTransportEnabled(true)
-                        Task { @MainActor in
-                            await Task.yield()
-                            beginRecipientResolution()
-                        }
-                    }
-                )
             case let .connectRequired(message):
                 Alert(
                     title: Text("Connect Messages to reply?"),
@@ -531,144 +532,99 @@ private struct MessageConversationPage: View {
                 }
 
                 Spacer(minLength: 10)
-
-                if controller.messageReplyTransportEnabled {
-                    Button("Turn off") { setReplyTransportEnabled(false) }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Color.agentBlue)
-                }
             }
             .font(.system(size: 9.5, weight: .medium))
             .foregroundStyle(.white.opacity(0.42))
             .padding(.horizontal, PanelPageLayout.contentInset)
             .frame(minHeight: 50)
         } else {
-            VStack(spacing: 5) {
-                HStack(spacing: 8) {
-                    recipientControl
-
-                    TextField("Write a reply", text: $draftBody, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .lineLimit(1...3)
-                        .font(.system(size: 10.5, weight: .regular))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 7)
-                        .background(
-                            .white.opacity(0.055),
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        )
-                        .onChange(of: draftBody) {
-                            guard draftBody.count > MessageReplyRequest.maximumBodyCharacterCount
-                            else { return }
-                            draftBody = String(
-                                draftBody.prefix(MessageReplyRequest.maximumBodyCharacterCount)
-                            )
+            HStack(alignment: .bottom, spacing: 4) {
+                TextField("iMessage", text: $draftBody, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...3)
+                    .font(.system(size: 11.5, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.94))
+                    .focused($replyFieldFocused)
+                    .padding(.leading, 13)
+                    .padding(.vertical, 10)
+                    .onKeyPress(.return, phases: .down) { keyPress in
+                        if keyPress.modifiers.contains(.shift) {
+                            return .ignored
                         }
-
-                    Button {
-                        attemptHandoff()
-                    } label: {
-                        Group {
-                            if isResolvingRecipient {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .scaleEffect(0.72)
-                            } else {
-                                Image(systemName: "arrow.up.right.square")
-                                    .font(.system(size: 11, weight: .semibold))
-                            }
+                        guard keyPress.modifiers.intersection([.command, .control, .option]).isEmpty
+                        else { return .ignored }
+                        if canAttemptHandoff {
+                            attemptHandoff()
                         }
-                        .frame(width: 30, height: 30)
-                        .background(
-                            canAttemptHandoff
-                                ? Color.agentBlue.opacity(0.2)
-                                : Color.white.opacity(0.04),
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        return .handled
+                    }
+                    .onChange(of: draftBody) {
+                        guard draftBody.count > MessageReplyRequest.maximumBodyCharacterCount
+                        else { return }
+                        draftBody = String(
+                            draftBody.prefix(MessageReplyRequest.maximumBodyCharacterCount)
                         )
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(
-                        canAttemptHandoff ? Color.agentBlue : Color.white.opacity(0.24)
-                    )
-                    .disabled(!canAttemptHandoff)
-                    .help("Review in Messages")
-                    .accessibilityLabel("Review reply in Messages")
+                    .accessibilityLabel("Message")
                     .accessibilityHint(
-                        "Confirms the handoff before opening Apple's Messages compose UI"
+                        "Press Return to review in Messages. Press Shift-Return for a new line."
                     )
-                }
 
-                HStack {
-                    Text(
-                        isResolvingRecipient
-                            ? "Confirming the reply recipient…"
-                            : replyStatusMessage
-                                ?? "Opens Messages for review · no background send"
+                Button(action: performReplyAction) {
+                    ZStack {
+                        if replyActionIsBusy {
+                            ProgressView()
+                                .controlSize(.small)
+                                .scaleEffect(0.72)
+                                .tint(.white.opacity(0.9))
+                        } else if hasReplyDraft {
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                        } else {
+                            Image(systemName: replyDictation.isRecording ? "mic.fill" : "mic")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(
+                                    replyDictation.isRecording
+                                        ? Color.agentAmber
+                                        : Color.white.opacity(0.42)
+                                )
+                        }
+                    }
+                    .frame(width: 32, height: 32)
+                    .background(
+                        hasReplyDraft ? Color.agentBlue : Color.clear,
+                        in: Circle()
                     )
-                    Spacer(minLength: 10)
+                    .contentShape(Circle())
                 }
-                .font(.system(size: 8.5, weight: .medium))
-                .foregroundStyle(.white.opacity(0.28))
+                .buttonStyle(.plain)
+                .disabled(replyActionIsBusy)
+                .help(hasReplyDraft ? "Review in Messages" : "Dictate a reply")
+                .accessibilityLabel(
+                    hasReplyDraft ? "Review reply in Messages" : "Dictate a reply"
+                )
+                .accessibilityHint(
+                    hasReplyDraft
+                        ? "Continues with this draft in Apple's Messages composer"
+                        : "Starts microphone dictation for this reply"
+                )
+                .padding(.trailing, 5)
+                .padding(.bottom, 4)
             }
+            .frame(minHeight: 44)
+            .background(
+                Color.white.opacity(0.06),
+                in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(.white.opacity(replyFieldFocused ? 0.13 : 0.07), lineWidth: 1)
+            }
+            .animation(.easeOut(duration: 0.15), value: hasReplyDraft)
             .padding(.horizontal, PanelPageLayout.contentInset)
-            .padding(.vertical, 8)
+            .padding(.vertical, 9)
         }
-    }
-
-    @ViewBuilder
-    private var recipientControl: some View {
-        if eligibleRecipients.count > 1 {
-            recipientMenu
-        } else {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("TO")
-                    .font(.system(size: 7.5, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.26))
-                Text(recipientSummary)
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.58))
-                    .lineLimit(1)
-            }
-            .frame(width: 82, height: 30, alignment: .leading)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Reply recipient")
-            .accessibilityValue(recipientSummary)
-        }
-    }
-
-    private var recipientMenu: some View {
-        Menu {
-            ForEach(eligibleRecipients) { recipient in
-                Button {
-                    selectedRecipientIDs = selectedRecipientIDs.contains(recipient.id)
-                        ? Set<String>()
-                        : Set([recipient.id])
-                } label: {
-                    Label(
-                        recipient.displayName,
-                        systemImage: selectedRecipientIDs.contains(recipient.id)
-                            ? "checkmark.circle.fill"
-                            : "circle"
-                    )
-                }
-            }
-        } label: {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("TO")
-                    .font(.system(size: 7.5, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.26))
-                Text(recipientSummary)
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.58))
-                    .lineLimit(1)
-            }
-            .frame(width: 82, height: 30, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
-        .accessibilityLabel("Reply recipients")
-        .accessibilityValue(recipientSummary)
     }
 
     private var eligibleRecipients: [MessageReplyRecipient] {
@@ -684,13 +640,17 @@ private struct MessageConversationPage: View {
         eligibleRecipients.filter { selectedRecipientIDs.contains($0.id) }
     }
 
-    private var recipientSummary: String {
-        selectedRecipients.first?.displayName ?? conversation.displayName
+    private var hasReplyDraft: Bool {
+        !draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var replyActionIsBusy: Bool {
+        isResolvingRecipient || isStartingReplyDictation
     }
 
     private var canAttemptHandoff: Bool {
         !conversation.isGroup
-            && !draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && hasReplyDraft
             && !isResolvingRecipient
     }
 
@@ -703,13 +663,64 @@ private struct MessageConversationPage: View {
         }
     }
 
-    private func attemptHandoff() {
-        guard canAttemptHandoff else { return }
-        replyStatusMessage = nil
-        if !controller.messageReplyTransportEnabled {
-            replyAlert = .enable
+    private func performReplyAction() {
+        if hasReplyDraft {
+            attemptHandoff()
+        } else {
+            toggleReplyDictation()
+        }
+    }
+
+    private func toggleReplyDictation() {
+        if replyDictation.isRecording {
+            let transcript = replyDictation.stop()
+            if !transcript.isEmpty {
+                draftBody = String(
+                    transcript.prefix(MessageReplyRequest.maximumBodyCharacterCount)
+                )
+            }
+            replyFieldFocused = true
             return
         }
+
+        guard !controller.meetingCapture.isActive,
+              !controller.dictation.isRecording,
+              !controller.isStartingDictation
+        else {
+            replyAlert = .notice(
+                title: "Microphone in use",
+                message: "Finish the active recording before dictating a message."
+            )
+            return
+        }
+
+        isStartingReplyDictation = true
+        replyFieldFocused = false
+        Task { @MainActor in
+            do {
+                try await replyDictation.start()
+                isStartingReplyDictation = false
+            } catch {
+                isStartingReplyDictation = false
+                replyDictation.cancel()
+                replyAlert = .notice(
+                    title: "Voice input unavailable",
+                    message: error.localizedDescription
+                )
+            }
+        }
+    }
+
+    private func attemptHandoff() {
+        if replyDictation.isRecording {
+            let transcript = replyDictation.stop()
+            if !transcript.isEmpty {
+                draftBody = String(
+                    transcript.prefix(MessageReplyRequest.maximumBodyCharacterCount)
+                )
+            }
+        }
+        guard canAttemptHandoff else { return }
         beginRecipientResolution()
     }
 
@@ -808,7 +819,6 @@ private struct MessageConversationPage: View {
         defer { pendingRequest = nil }
         do {
             _ = try replyTransport.beginUserConfirmedHandoff(request)
-            replyStatusMessage = "Messages handoff requested · finish the draft in Messages"
         } catch {
             replyAlert = .notice(
                 title: "Messages handoff unavailable",
@@ -817,17 +827,9 @@ private struct MessageConversationPage: View {
         }
     }
 
-    private func setReplyTransportEnabled(_ enabled: Bool) {
-        controller.setMessageReplyTransportEnabled(enabled)
-        if !enabled {
-            draftBody = ""
-            pendingRequest = nil
-        }
-    }
 }
 
 private enum MacMessageReplyAlert: Identifiable {
-    case enable
     case connectRequired(String)
     case accessRequired(String)
     case confirm
@@ -835,8 +837,6 @@ private enum MacMessageReplyAlert: Identifiable {
 
     var id: String {
         switch self {
-        case .enable:
-            "enable"
         case let .connectRequired(message):
             "connect:\(message)"
         case let .accessRequired(message):

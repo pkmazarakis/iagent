@@ -55,33 +55,42 @@ final class MessageReplySourceContractTests: XCTestCase {
     XCTAssertTrue(view.contains("iAgent will not press Send"))
     XCTAssertTrue(view.contains("guard !conversation.isGroup else { return [] }"))
     XCTAssertTrue(view.contains("Phase 1 supports one-to-one conversations only"))
-    XCTAssertTrue(view.contains("Messages handoff requested"))
     XCTAssertFalse(view.contains("title: \"Opened Messages\""))
-    XCTAssertTrue(
-      view.contains(
-        "every eligible one-to-one conversation in your rolling 14-day Messages inbox"
-      )
-    )
     XCTAssertTrue(controller.contains("func setMessageReplyTransportEnabled(_ enabled: Bool)"))
     XCTAssertTrue(controller.contains("scrubMessageReplyAddresses()"))
     XCTAssertTrue(controller.contains("startMessageProviderUpdates()"))
   }
 
-  func testMacDirectComposerIsAlwaysPresentAndReplyEnablementIsLazy() throws {
+  func testMacDirectComposerMatchesSingleFieldVoiceAndReturnContract() throws {
     let view = try source("Sources/iAgentPanel/MessageInboxViews.swift")
     let composerStart = try XCTUnwrap(view.range(of: "private var replyComposer"))
     let composerEnd = try XCTUnwrap(
-      view.range(of: "private var recipientControl", range: composerStart.upperBound..<view.endIndex)
+      view.range(of: "private var eligibleRecipients", range: composerStart.upperBound..<view.endIndex)
     )
     let composer = String(view[composerStart.lowerBound..<composerEnd.lowerBound])
 
-    XCTAssertTrue(composer.contains("TextField(\"Write a reply\""))
+    XCTAssertTrue(composer.contains("TextField(\"iMessage\""))
     XCTAssertTrue(composer.contains("attemptHandoff()"))
-    XCTAssertFalse(composer.contains("else if !controller.messageReplyTransportEnabled"))
-    XCTAssertFalse(composer.contains("else if eligibleRecipients.isEmpty"))
+    XCTAssertTrue(composer.contains("Image(systemName: \"arrow.up\")"))
+    XCTAssertTrue(composer.contains("Color.agentBlue"))
+    XCTAssertTrue(composer.contains("\"mic.fill\" : \"mic\""))
+    XCTAssertTrue(composer.contains("performReplyAction"))
+    XCTAssertTrue(composer.contains(".onKeyPress(.return, phases: .down)"))
+    XCTAssertTrue(composer.contains("keyPress.modifiers.contains(.shift)"))
+    XCTAssertTrue(composer.contains("[.command, .control, .option]"))
+    XCTAssertTrue(composer.contains("return .ignored"))
+    XCTAssertTrue(composer.contains("return .handled"))
+    XCTAssertTrue(composer.contains(".accessibilityLabel(\"Message\")"))
+    XCTAssertTrue(composer.contains("Press Return to review in Messages"))
+    XCTAssertTrue(composer.contains("Review reply in Messages"))
+    XCTAssertTrue(view.contains("toggleReplyDictation()"))
+    XCTAssertTrue(view.contains("replyDictation.start()"))
+    XCTAssertFalse(composer.contains("recipientControl"))
+    XCTAssertFalse(composer.contains("arrow.up.right.square"))
     XCTAssertFalse(composer.contains("Button(\"Enable replies\")"))
     XCTAssertFalse(composer.contains("Refreshing reply recipients"))
     XCTAssertFalse(composer.contains("controller.isMessageInboxSyncing"))
+    XCTAssertFalse(composer.contains("Opens Messages for review"))
 
     let attemptStart = try XCTUnwrap(view.range(of: "private func attemptHandoff()"))
     let attemptEnd = try XCTUnwrap(
@@ -91,19 +100,12 @@ final class MessageReplySourceContractTests: XCTestCase {
       )
     )
     let attempt = String(view[attemptStart.lowerBound..<attemptEnd.lowerBound])
-    XCTAssertTrue(attempt.contains("if !controller.messageReplyTransportEnabled"))
-    XCTAssertTrue(attempt.contains("replyAlert = .enable"))
+    XCTAssertTrue(attempt.contains("beginRecipientResolution()"))
+    XCTAssertFalse(attempt.contains("messageReplyTransportEnabled"))
+    XCTAssertFalse(attempt.contains("replyAlert = .enable"))
     XCTAssertFalse(attempt.contains("setMessageReplyTransportEnabled(true)"))
 
-    let enableStart = try XCTUnwrap(view.range(of: "case .enable:"))
-    let enableEnd = try XCTUnwrap(
-      view.range(of: "case let .connectRequired", range: enableStart.upperBound..<view.endIndex)
-    )
-    let enableAlert = String(view[enableStart.lowerBound..<enableEnd.lowerBound])
-    XCTAssertTrue(enableAlert.contains("primaryButton: .cancel()"))
-    XCTAssertTrue(enableAlert.contains("setMessageReplyTransportEnabled(true)"))
-    XCTAssertTrue(enableAlert.contains("beginRecipientResolution()"))
-    XCTAssertFalse(enableAlert.contains("beginUserConfirmedHandoff"))
+    XCTAssertFalse(view.contains("case .enable:"))
   }
 
   func testInitialMessagesBackfillStopsLoadingBeforeIdleUpdatesStream() throws {
