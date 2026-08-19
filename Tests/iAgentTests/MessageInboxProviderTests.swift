@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import SQLite3
 import XCTest
@@ -150,6 +151,85 @@ final class MessageInboxProviderTests: XCTestCase {
     )
     XCTAssertThrowsError(
       try SandboxAccessManager.validatedMessagesDatabaseURL(in: wrongDirectory)
+    )
+  }
+
+  func testMessagesFolderSelectionCanBeRetainedBeforeFullDiskAccessRevealsDatabase() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("iagent-messages-selection-\(UUID().uuidString)", isDirectory: true)
+    let messagesDirectory = root.appendingPathComponent("Messages", isDirectory: true)
+    let wrongDirectory = root.appendingPathComponent("NotMessages", isDirectory: true)
+    try FileManager.default.createDirectory(at: messagesDirectory, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: wrongDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    XCTAssertEqual(
+      try SandboxAccessManager.messagesDatabaseURLForSelectedDirectory(messagesDirectory),
+      messagesDirectory.appendingPathComponent("chat.db")
+    )
+    XCTAssertFalse(
+      FileManager.default.fileExists(
+        atPath: messagesDirectory.appendingPathComponent("chat.db").path
+      )
+    )
+    XCTAssertThrowsError(
+      try SandboxAccessManager.messagesDatabaseURLForSelectedDirectory(wrongDirectory)
+    )
+  }
+
+  func testMessagesDatabaseProbeSeparatesPrivacyDenialFromMissingSource() {
+    for errorNumber in [EACCES, EPERM] {
+      guard case .permissionRequired = LocalMacMessagesProvider
+        .accessStateForFailedDatabaseProbe(
+          errorNumber: errorNumber,
+          directoryIsReadable: true
+        )
+      else {
+        return XCTFail("Expected errno \(errorNumber) to require privacy access")
+      }
+    }
+
+    guard case .permissionRequired = LocalMacMessagesProvider
+      .accessStateForFailedDatabaseProbe(
+        errorNumber: ENOENT,
+        directoryIsReadable: false
+      )
+    else {
+      return XCTFail("An unreadable Messages directory must require privacy access")
+    }
+
+    guard case let .failed(message) = LocalMacMessagesProvider
+      .accessStateForFailedDatabaseProbe(
+        errorNumber: ENOENT,
+        directoryIsReadable: true
+      )
+    else {
+      return XCTFail("A genuinely missing chat.db should be a source failure")
+    }
+    XCTAssertTrue(message.contains("was not found"))
+  }
+
+  func testMessagesRecoveryChoosesFolderOnlyUntilSandboxBookmarkExists() {
+    XCTAssertEqual(
+      messageAccessRecoveryDestination(
+        isSandboxed: true,
+        hasAuthorizedMessagesDirectory: false
+      ),
+      .chooseMessagesFolder
+    )
+    XCTAssertEqual(
+      messageAccessRecoveryDestination(
+        isSandboxed: true,
+        hasAuthorizedMessagesDirectory: true
+      ),
+      .openPrivacySettings
+    )
+    XCTAssertEqual(
+      messageAccessRecoveryDestination(
+        isSandboxed: false,
+        hasAuthorizedMessagesDirectory: false
+      ),
+      .openPrivacySettings
     )
   }
 

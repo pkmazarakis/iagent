@@ -131,6 +131,36 @@ final class MessageReplySourceContractTests: XCTestCase {
     XCTAssertFalse(implementation.contains("var ingestedFirstUpdate = false"))
   }
 
+  func testSandboxMessagesSelectionSurvivesTheSeparatePrivacyGate() throws {
+    let sandbox = try source("Sources/iAgentPanel/SandboxAccessManager.swift")
+    let restoreStart = try XCTUnwrap(
+      sandbox.range(of: "func restoreMessagesAccessIfEnabled(")
+    )
+    let restoreEnd = try XCTUnwrap(
+      sandbox.range(
+        of: "func requestMessagesDirectoryAccess(",
+        range: restoreStart.upperBound..<sandbox.endIndex
+      )
+    )
+    let restore = String(sandbox[restoreStart.lowerBound..<restoreEnd.lowerBound])
+    XCTAssertTrue(restore.contains("messagesDatabaseURLForSelectedDirectory"))
+    XCTAssertFalse(restore.contains("validatedMessagesDatabaseURL"))
+
+    let requestStart = restoreEnd
+    let requestEnd = try XCTUnwrap(
+      sandbox.range(
+        of: "nonisolated static func messagesDatabaseURLForSelectedDirectory(",
+        range: requestStart.upperBound..<sandbox.endIndex
+      )
+    )
+    let request = String(sandbox[requestStart.lowerBound..<requestEnd.lowerBound])
+    XCTAssertTrue(request.contains("messagesDatabaseURLForSelectedDirectory"))
+    XCTAssertTrue(request.contains(".withSecurityScope"))
+    XCTAssertTrue(request.contains("defaults.set(data, forKey: Key.messages)"))
+    XCTAssertTrue(request.contains("messagesDirectoryURL = directoryURL"))
+    XCTAssertFalse(request.contains("validatedMessagesDatabaseURL"))
+  }
+
   func testProviderPublishesAddressesOnlyBehindDesktopOptIn() throws {
     let provider = try source("Sources/iAgentPanel/MessageInboxProvider.swift")
 

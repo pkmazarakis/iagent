@@ -449,6 +449,20 @@ private enum NoteReloadResult: Sendable {
     case failure(String)
 }
 
+enum MessageAccessRecoveryDestination: Equatable {
+    case chooseMessagesFolder
+    case openPrivacySettings
+}
+
+func messageAccessRecoveryDestination(
+    isSandboxed: Bool,
+    hasAuthorizedMessagesDirectory: Bool
+) -> MessageAccessRecoveryDestination {
+    isSandboxed && !hasAuthorizedMessagesDirectory
+        ? .chooseMessagesFolder
+        : .openPrivacySettings
+}
+
 @MainActor
 final class PanelController: ObservableObject {
     @Published var expanded = false
@@ -1280,8 +1294,23 @@ final class PanelController: ObservableObject {
                     .requestMessagesDirectoryAccess(defaults: preferences)
                 else { return }
                 authorizedDatabaseURL = selectedDatabaseURL
+            } catch let error as SandboxMessagesAccessError {
+                switch error {
+                case .invalidMessagesDirectory:
+                    messageProviderAccess = .disabled(error.localizedDescription)
+                case .securityScopeUnavailable, .bookmarkCreationFailed:
+                    messageProviderAccess = .failed(error.localizedDescription)
+                }
+                Task { [weak self] in
+                    guard let self else { return }
+                    let state = await self.desktopSync.publishMessageRelayState(
+                        self.messageProviderAccess
+                    )
+                    self.applyDesktopSyncState(state, basedOn: nil)
+                }
+                return
             } catch {
-                messageProviderAccess = .permissionRequired(error.localizedDescription)
+                messageProviderAccess = .failed(error.localizedDescription)
                 Task { [weak self] in
                     guard let self else { return }
                     let state = await self.desktopSync.publishMessageRelayState(
@@ -1340,18 +1369,30 @@ final class PanelController: ObservableObject {
     }
 
     var messageAccessRecoveryActionTitle: String {
-        SandboxAccessManager.shared.isSandboxed
-            ? "Choose Messages Folder"
-            : "Open Privacy Settings"
+        switch messageAccessRecoveryDestination(
+            isSandboxed: SandboxAccessManager.shared.isSandboxed,
+            hasAuthorizedMessagesDirectory:
+                SandboxAccessManager.shared.hasAuthorizedMessagesDirectory
+        ) {
+        case .chooseMessagesFolder:
+            "Choose Messages Folder"
+        case .openPrivacySettings:
+            "Open Privacy Settings"
+        }
     }
 
     func recoverLocalMessagesAccess() {
-        if SandboxAccessManager.shared.isSandboxed {
+        switch messageAccessRecoveryDestination(
+            isSandboxed: SandboxAccessManager.shared.isSandboxed,
+            hasAuthorizedMessagesDirectory:
+                SandboxAccessManager.shared.hasAuthorizedMessagesDirectory
+        ) {
+        case .chooseMessagesFolder:
             connectLocalMessages()
-            return
+        case .openPrivacySettings:
+            guard let url = messageFullDiskAccessSettingsURL() else { return }
+            NSWorkspace.shared.open(url)
         }
-        guard let url = messageFullDiskAccessSettingsURL() else { return }
-        NSWorkspace.shared.open(url)
     }
 
     private func markSelectedMessageConversationReadIfNeeded() {

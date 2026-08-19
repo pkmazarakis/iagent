@@ -34,6 +34,10 @@ final class SandboxAccessManager {
   private(set) var messagesDirectoryURL: URL?
   private var accessedURLs: [URL] = []
 
+  var hasAuthorizedMessagesDirectory: Bool {
+    messagesDirectoryURL != nil
+  }
+
   var authorizedMessagesDatabaseURL: URL? {
     messagesDirectoryURL?.appendingPathComponent("chat.db", isDirectory: false)
   }
@@ -101,7 +105,9 @@ final class SandboxAccessManager {
       readOnly: true
     ) else { return nil }
     do {
-      let databaseURL = try Self.validatedMessagesDatabaseURL(in: directoryURL)
+      let databaseURL = try Self.messagesDatabaseURLForSelectedDirectory(
+        directoryURL
+      )
       messagesDirectoryURL = directoryURL
       return databaseURL
     } catch {
@@ -132,7 +138,12 @@ final class SandboxAccessManager {
       throw SandboxMessagesAccessError.securityScopeUnavailable
     }
     do {
-      let databaseURL = try Self.validatedMessagesDatabaseURL(in: directoryURL)
+      // Store the user-selected sandbox extension before probing chat.db.
+      // macOS Full Disk Access is a separate TCC gate and can make the file
+      // appear absent even though this is the correct Messages directory.
+      let databaseURL = try Self.messagesDatabaseURLForSelectedDirectory(
+        directoryURL
+      )
       let data = try directoryURL.bookmarkData(
         options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
         includingResourceValuesForKeys: nil,
@@ -155,19 +166,21 @@ final class SandboxAccessManager {
     }
   }
 
+  nonisolated static func messagesDatabaseURLForSelectedDirectory(
+    _ directoryURL: URL
+  ) throws -> URL {
+    let directory = directoryURL.standardizedFileURL
+    guard directory.lastPathComponent.caseInsensitiveCompare("Messages") == .orderedSame else {
+      throw SandboxMessagesAccessError.invalidMessagesDirectory
+    }
+    return directory.appendingPathComponent("chat.db", isDirectory: false)
+  }
+
   nonisolated static func validatedMessagesDatabaseURL(
     in directoryURL: URL,
     fileManager: FileManager = .default
   ) throws -> URL {
-    let directory = directoryURL.standardizedFileURL
-    var isDirectory: ObjCBool = false
-    guard directory.lastPathComponent.caseInsensitiveCompare("Messages") == .orderedSame,
-      fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory),
-      isDirectory.boolValue
-    else {
-      throw SandboxMessagesAccessError.invalidMessagesDirectory
-    }
-    let databaseURL = directory.appendingPathComponent("chat.db", isDirectory: false)
+    let databaseURL = try messagesDatabaseURLForSelectedDirectory(directoryURL)
     var databaseIsDirectory: ObjCBool = false
     guard fileManager.fileExists(atPath: databaseURL.path, isDirectory: &databaseIsDirectory),
       !databaseIsDirectory.boolValue

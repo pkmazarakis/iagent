@@ -1508,13 +1508,17 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
 
   private static func inspectAccess(to databaseURL: URL) -> MessageProviderAccessState {
     let fileManager = FileManager.default
-    guard fileManager.fileExists(atPath: databaseURL.path) else {
-      let messagesDirectory = databaseURL.deletingLastPathComponent()
-      if !fileManager.isReadableFile(atPath: messagesDirectory.path) {
-        return .permissionRequired(permissionMessage)
-      }
-      return .failed(
-        "The local Messages database was not found. Open Messages on this Mac and try again."
+    var metadata = stat()
+    errno = 0
+    let probeResult = databaseURL.path.withCString { path in
+      Darwin.lstat(path, &metadata)
+    }
+    if probeResult != 0 {
+      return accessStateForFailedDatabaseProbe(
+        errorNumber: errno,
+        directoryIsReadable: fileManager.isReadableFile(
+          atPath: databaseURL.deletingLastPathComponent().path
+        )
       )
     }
     guard fileManager.isReadableFile(atPath: databaseURL.path) else {
@@ -1531,6 +1535,24 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
     } catch {
       return .failed("The local Messages source could not be inspected safely.")
     }
+  }
+
+  static func accessStateForFailedDatabaseProbe(
+    errorNumber: Int32,
+    directoryIsReadable: Bool
+  ) -> MessageProviderAccessState {
+    if errorNumber == EACCES || errorNumber == EPERM {
+      return .permissionRequired(permissionMessage)
+    }
+    if errorNumber == ENOENT {
+      if !directoryIsReadable {
+        return .permissionRequired(permissionMessage)
+      }
+      return .failed(
+        "The local Messages database was not found. Open Messages on this Mac and try again."
+      )
+    }
+    return .failed("The local Messages source could not be inspected safely.")
   }
 
   private static func loadSnapshot(
