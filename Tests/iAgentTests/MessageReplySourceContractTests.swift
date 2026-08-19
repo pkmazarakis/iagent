@@ -36,6 +36,180 @@ final class MessageReplySourceContractTests: XCTestCase {
     XCTAssertFalse(view.contains("MessageBubble(message: request"))
   }
 
+  func testIOSMessageSheetKeepsCompactComposerAndLazyFirstSendFlow() throws {
+    let view = try source("Mobile/iAgentMobile/Views/MessagesMobileView.swift")
+    let composerStart = try XCTUnwrap(view.range(of: "private func replyComposer"))
+    let composerEnd = try XCTUnwrap(
+      view.range(
+        of: "private func eligibleRecipients",
+        range: composerStart.upperBound..<view.endIndex
+      )
+    )
+    let composer = String(view[composerStart.lowerBound..<composerEnd.lowerBound])
+
+    XCTAssertTrue(view.contains(".presentationDetents([.medium, .large])"))
+    XCTAssertTrue(view.contains(".fullScreenCover(item: $composeRoute)"))
+    XCTAssertTrue(view.contains("@StateObject private var replyDictation = MobileMeetingRecorder()"))
+    XCTAssertTrue(view.contains("MobileMessageComposerLayout"))
+    XCTAssertTrue(view.contains("static let height: CGFloat = 40"))
+    XCTAssertTrue(view.contains("static let actionSize: CGFloat = 30"))
+
+    XCTAssertTrue(composer.contains("TextField(replyPlaceholder(for: conversation)"))
+    XCTAssertTrue(composer.contains(".lineLimit(1)"))
+    XCTAssertTrue(composer.contains(".font(.body.weight(.medium))"))
+    XCTAssertTrue(composer.contains(".submitLabel(.send)"))
+    XCTAssertTrue(composer.contains(".onSubmit"))
+    XCTAssertTrue(composer.contains("attemptReply(for: conversation)"))
+    XCTAssertTrue(composer.contains("performComposerAction(for: conversation)"))
+    XCTAssertTrue(composer.contains("Image(systemName: \"arrow.up\")"))
+    XCTAssertTrue(composer.contains("replyDictation.isRecording ? \"waveform\" : \"mic\""))
+    XCTAssertTrue(composer.contains(".disabled(replyActionIsBusy)"))
+    XCTAssertTrue(composer.contains("ProgressView()"))
+    XCTAssertTrue(composer.contains(".frame(width: 44, height: 44)"))
+    XCTAssertTrue(composer.contains(".contentShape(Rectangle())"))
+    XCTAssertTrue(
+      composer.contains(
+        "width: MobileMessageComposerLayout.actionSize,\n            height: MobileMessageComposerLayout.actionSize"
+      )
+    )
+    XCTAssertTrue(composer.contains(".frame(minHeight: MobileMessageComposerLayout.height)"))
+    XCTAssertTrue(composer.contains(".frame(minHeight: 44)"))
+    XCTAssertFalse(composer.contains("recipientMenu("))
+    XCTAssertFalse(composer.contains("Button(\"Enable replies\")"))
+    XCTAssertFalse(composer.contains("Apple's composer always asks you to review and Send."))
+    XCTAssertFalse(composer.contains("TextField(\"Write a reply\""))
+
+    XCTAssertTrue(view.contains("guard replyTransportEnabled else"))
+    XCTAssertTrue(view.contains("pendingReplyAfterEnable = true"))
+    XCTAssertTrue(view.contains("replyAlert = .enable"))
+    XCTAssertTrue(view.contains("continueReplyAttempt(for: conversation, generation: generation)"))
+    XCTAssertTrue(view.contains("replyTransport.canSendText()"))
+    XCTAssertTrue(view.contains("replyDictation.stop()"))
+    XCTAssertTrue(view.contains("replyDictation.reset()"))
+    XCTAssertTrue(view.contains("? \"Text Message\"\n      : \"iMessage\""))
+
+    let completionStart = try XCTUnwrap(view.range(of: "private func finishCompose"))
+    let completionEnd = try XCTUnwrap(
+      view.range(
+        of: "private func setReplyTransportEnabled",
+        range: completionStart.upperBound..<view.endIndex
+      )
+    )
+    let completion = String(view[completionStart.lowerBound..<completionEnd.lowerBound])
+    XCTAssertTrue(completion.contains("case .cancelled:\n      break"))
+    XCTAssertTrue(completion.contains("case .sendRequested:\n      draftBody = \"\""))
+    XCTAssertTrue(completion.contains("case .failed(let detail):"))
+    XCTAssertEqual(completion.components(separatedBy: "draftBody = \"\"").count - 1, 1)
+  }
+
+  func testIOSMessageComposerFailsClosedAndCancelsLifecycleWork() throws {
+    let view = try source("Mobile/iAgentMobile/Views/MessagesMobileView.swift")
+
+    let selectionStart = try XCTUnwrap(
+      view.range(of: "private func reconcileRecipientSelection")
+    )
+    let selectionEnd = try XCTUnwrap(
+      view.range(
+        of: "private var hasReplyDraft",
+        range: selectionStart.upperBound..<view.endIndex
+      )
+    )
+    let selection = String(view[selectionStart.lowerBound..<selectionEnd.lowerBound])
+    XCTAssertTrue(selection.contains("eligibleIDs.count == 1"))
+    XCTAssertTrue(selection.contains("? Set(eligibleIDs)"))
+    XCTAssertTrue(selection.contains(": Set<String>()"))
+    XCTAssertFalse(selection.contains(".first"))
+
+    let continuationStart = try XCTUnwrap(
+      view.range(of: "private func continueReplyAttempt")
+    )
+    let continuationEnd = try XCTUnwrap(
+      view.range(
+        of: "private func isComposerOperationActive",
+        range: continuationStart.upperBound..<view.endIndex
+      )
+    )
+    let continuation = String(
+      view[continuationStart.lowerBound..<continuationEnd.lowerBound]
+    )
+    XCTAssertTrue(continuation.contains("guard isComposerOperationActive(generation)"))
+    XCTAssertTrue(continuation.contains("eligibleRecipients(for: conversation).count == 1"))
+    XCTAssertTrue(continuation.contains("selectedRecipients(for: conversation).count == 1"))
+    XCTAssertTrue(continuation.contains("exactly one validated phone number"))
+
+    XCTAssertTrue(view.contains("@State private var composerTask: Task<Void, Never>?"))
+    XCTAssertTrue(view.contains("@State private var composerLifecycleGeneration = 0"))
+    XCTAssertTrue(view.contains("composerTask = Task { @MainActor in"))
+    XCTAssertTrue(
+      view.contains("!Task.isCancelled && generation == composerLifecycleGeneration")
+    )
+    XCTAssertTrue(view.contains("scheduleReplyContinuation(for: conversation)"))
+
+    let disappearStart = try XCTUnwrap(view.range(of: ".onDisappear {"))
+    let disappearEnd = try XCTUnwrap(
+      view.range(
+        of: "\n    }",
+        range: disappearStart.upperBound..<view.endIndex
+      )
+    )
+    let disappear = String(view[disappearStart.lowerBound..<disappearEnd.upperBound])
+    XCTAssertTrue(disappear.contains("composerLifecycleGeneration &+= 1"))
+    XCTAssertTrue(disappear.contains("composerTask?.cancel()"))
+    XCTAssertTrue(disappear.contains("composerTask = nil"))
+    XCTAssertTrue(disappear.contains("pendingReplyAfterEnable = false"))
+    XCTAssertTrue(disappear.contains("replyDictation.reset()"))
+  }
+
+  func testIOSMessageComposerRecoversTranscriptBeforeResetAndAlert() throws {
+    let view = try source("Mobile/iAgentMobile/Views/MessagesMobileView.swift")
+    let handlerStart = try XCTUnwrap(view.range(of: "private func handleReplyDictationError"))
+    let handlerEnd = try XCTUnwrap(
+      view.range(
+        of: "private func openSystemComposer",
+        range: handlerStart.upperBound..<view.endIndex
+      )
+    )
+    let handler = String(view[handlerStart.lowerBound..<handlerEnd.lowerBound])
+
+    let capture = try XCTUnwrap(handler.range(of: "replyDictation.transcript"))
+    let apply = try XCTUnwrap(handler.range(of: "applyDictationTranscript(recoverableTranscript)"))
+    let reset = try XCTUnwrap(handler.range(of: "replyDictation.reset()"))
+    let alert = try XCTUnwrap(handler.range(of: "replyAlert = .notice"))
+    XCTAssertLessThan(capture.lowerBound, apply.lowerBound)
+    XCTAssertLessThan(apply.lowerBound, reset.lowerBound)
+    XCTAssertLessThan(reset.lowerBound, alert.lowerBound)
+    XCTAssertTrue(handler.contains("composerLifecycleGeneration &+= 1"))
+    XCTAssertTrue(handler.contains("composerTask?.cancel()"))
+  }
+
+  func testIOSMessageDictationFinalizationPreservesConcurrentEdits() throws {
+    let view = try source("Mobile/iAgentMobile/Views/MessagesMobileView.swift")
+    XCTAssertTrue(view.contains("@State private var lastAppliedDictationDraft: String?"))
+    XCTAssertTrue(view.contains("lastAppliedDictationDraft = draftBody"))
+
+    let applyStart = try XCTUnwrap(view.range(of: "private func applyDictationTranscript"))
+    let applyEnd = try XCTUnwrap(
+      view.range(
+        of: "private func attemptReply",
+        range: applyStart.upperBound..<view.endIndex
+      )
+    )
+    let apply = String(view[applyStart.lowerBound..<applyEnd.lowerBound])
+    XCTAssertTrue(apply.contains("guard let lastAppliedDictationDraft"))
+    XCTAssertTrue(apply.contains("draftBody == lastAppliedDictationDraft"))
+    XCTAssertTrue(apply.contains("self.lastAppliedDictationDraft = updatedDraft"))
+
+    let composerStart = try XCTUnwrap(view.range(of: "private func replyComposer"))
+    let composerEnd = try XCTUnwrap(
+      view.range(
+        of: "private func eligibleRecipients",
+        range: composerStart.upperBound..<view.endIndex
+      )
+    )
+    let composer = String(view[composerStart.lowerBound..<composerEnd.lowerBound])
+    XCTAssertTrue(composer.contains(".disabled(replyActionIsBusy)"))
+  }
+
   func testMacUsesBoundedPublicAppleScriptWithExplicitComposeFallback() throws {
     let transport = try source("Sources/iAgentPanel/MessageReplyTransport.swift")
     let pipeline = try source("Sources/iAgentPanel/MessagesDirectSendPipeline.swift")

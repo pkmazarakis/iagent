@@ -568,11 +568,19 @@ private struct MessagesHistorySheet: View {
   let replyTransport: any MobileMessageReplyTransport
 
   @Environment(\.dismiss) private var dismiss
+  @StateObject private var replyDictation = MobileMeetingRecorder()
+  @FocusState private var replyFieldFocused: Bool
   @State private var draftBody = ""
+  @State private var dictationBase = ""
   @State private var selectedRecipientIDs = Set<String>()
   @State private var composeRoute: MobileMessageComposeRoute?
   @State private var replyAlert: MobileMessageReplyAlert?
   @State private var replyTransportEnabled = MessageReplyPreferences.isEnabled(in: .standard)
+  @State private var pendingReplyAfterEnable = false
+  @State private var isPreparingReply = false
+  @State private var lastAppliedDictationDraft: String?
+  @State private var composerTask: Task<Void, Never>?
+  @State private var composerLifecycleGeneration = 0
 
   private var conversation: SyncedMessageConversation? {
     guard !model.messages(for: conversationID).isEmpty else { return nil }
@@ -629,12 +637,18 @@ private struct MessagesHistorySheet: View {
           message: Text(
             "This setting applies to every eligible one-to-one conversation in your rolling 14-day Messages inbox. iAgent can prepare a phone number and draft only when your Mac has separately opted in to share validated reply addresses through your private iCloud data. Apple's composer appears for review, and you choose whether to Send."
           ),
-          primaryButton: .cancel(),
+          primaryButton: .cancel {
+            pendingReplyAfterEnable = false
+          },
           secondaryButton: .default(Text("Enable")) {
             MessageReplyPreferences.setEnabled(true, in: .standard)
             replyTransportEnabled = true
             if let conversation {
               reconcileRecipientSelection(for: conversation)
+              if pendingReplyAfterEnable {
+                pendingReplyAfterEnable = false
+                scheduleReplyContinuation(for: conversation)
+              }
             }
           }
         )
@@ -651,6 +665,7 @@ private struct MessagesHistorySheet: View {
       await model.markConversationRead(conversationID)
     }
     .onAppear {
+      composerLifecycleGeneration &+= 1
       if let conversation {
         reconcileRecipientSelection(for: conversation)
       }
@@ -659,6 +674,23 @@ private struct MessagesHistorySheet: View {
       if let conversation {
         reconcileRecipientSelection(for: conversation)
       }
+    }
+    .onChange(of: replyDictation.transcript) { _, transcript in
+      guard replyDictation.isRecording else { return }
+      applyDictationTranscript(transcript)
+    }
+    .onChange(of: replyDictation.errorMessage) { _, message in
+      guard let message, !message.isEmpty else { return }
+      handleReplyDictationError(message)
+    }
+    .onDisappear {
+      composerLifecycleGeneration &+= 1
+      composerTask?.cancel()
+      composerTask = nil
+      pendingReplyAfterEnable = false
+      isPreparingReply = false
+      lastAppliedDictationDraft = nil
+      replyDictation.reset()
     }
   }
 
@@ -763,125 +795,78 @@ private struct MessagesHistorySheet: View {
       }
       .padding(.horizontal, 20)
       .padding(.vertical, 12)
-    } else if !replyTransportEnabled {
-      HStack(spacing: 12) {
-        Label("Read-only inbox", systemImage: "lock")
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(PanelTheme.secondary)
-
-        Spacer(minLength: 12)
-
-        Button("Enable replies") {
-          replyAlert = .enable
-        }
-        .font(.system(size: 12, weight: .bold))
-        .foregroundStyle(PanelTheme.blue)
-        .frame(minHeight: 44)
-        .accessibilityHint("Explains the user-confirmed Apple Messages handoff")
-      }
-      .padding(.horizontal, 20)
-      .padding(.vertical, 8)
-    } else if eligibleRecipients(for: conversation).isEmpty {
-      VStack(alignment: .leading, spacing: 6) {
-        HStack(spacing: 8) {
-          Image(systemName: "person.crop.circle.badge.exclamationmark")
-          Text("Recipient unavailable")
-            .fontWeight(.semibold)
-          Spacer(minLength: 12)
-          Button("Turn off") { setReplyTransportEnabled(false) }
-        }
-        .font(.system(size: 12))
-        .foregroundStyle(PanelTheme.secondary)
-
-        Text(
-          "Enable reply handoff on the Mac that provides Messages, then sync again. iPhone replies require a validated phone number; names, email handles, and IDs are never guessed."
-        )
-        .font(.system(size: 10, weight: .medium))
-        .foregroundStyle(PanelTheme.tertiary)
-        .fixedSize(horizontal: false, vertical: true)
-      }
-      .padding(.horizontal, 20)
-      .padding(.vertical, 12)
     } else {
-      VStack(spacing: 8) {
-        HStack(spacing: 10) {
-          recipientMenu(conversation)
-
-          TextField("Write a reply", text: $draftBody, axis: .vertical)
-            .lineLimit(1...4)
-            .font(.system(size: 15, weight: .medium))
-            .foregroundStyle(PanelTheme.primary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(PanelTheme.raisedSurface, in: RoundedRectangle(cornerRadius: 14))
-            .onChange(of: draftBody) { _, value in
-              guard value.count > MessageReplyRequest.maximumBodyCharacterCount else { return }
-              draftBody = String(value.prefix(MessageReplyRequest.maximumBodyCharacterCount))
-            }
-
-          Button(action: { openSystemComposer(for: conversation) }) {
-            Image(systemName: "arrow.up")
-              .font(.system(size: 14, weight: .bold))
-              .foregroundStyle(canOpenComposer(for: conversation) ? Color.white : PanelTheme.tertiary)
-              .frame(width: 42, height: 42)
-              .background(
-                canOpenComposer(for: conversation) ? PanelTheme.blue : PanelTheme.surface,
-                in: Circle()
-              )
-          }
-          .buttonStyle(.plain)
-          .disabled(!canOpenComposer(for: conversation))
-          .accessibilityLabel("Review reply in Messages")
-          .accessibilityHint("Opens Apple's composer; Send still requires your confirmation")
-        }
-
-        HStack {
-          Text("Apple's composer always asks you to review and Send.")
-          Spacer(minLength: 12)
-          Button("Turn off") { setReplyTransportEnabled(false) }
-        }
-        .font(.system(size: 9, weight: .semibold))
-        .foregroundStyle(PanelTheme.tertiary)
-      }
-      .padding(.horizontal, 18)
-      .padding(.top, 10)
-      .padding(.bottom, 12)
-    }
-  }
-
-  private func recipientMenu(_ conversation: SyncedMessageConversation) -> some View {
-    let recipients = eligibleRecipients(for: conversation)
-    return Menu {
-      ForEach(recipients) { recipient in
-        Button {
-          selectedRecipientIDs = selectedRecipientIDs.contains(recipient.id)
-            ? Set<String>()
-            : Set([recipient.id])
-        } label: {
-          Label(
-            recipient.displayName,
-            systemImage: selectedRecipientIDs.contains(recipient.id)
-              ? "checkmark.circle.fill"
-              : "circle"
-          )
-        }
-      }
-    } label: {
-      VStack(alignment: .leading, spacing: 2) {
-        Text("TO")
-          .font(.system(size: 8, weight: .bold))
-          .foregroundStyle(PanelTheme.tertiary)
-        Text(recipientSummary(in: recipients))
-          .font(.system(size: 11, weight: .semibold))
-          .foregroundStyle(PanelTheme.secondary)
+      ZStack(alignment: .trailing) {
+        TextField(replyPlaceholder(for: conversation), text: $draftBody)
           .lineLimit(1)
+          .font(.body.weight(.medium))
+          .foregroundStyle(PanelTheme.primary)
+          .focused($replyFieldFocused)
+          .submitLabel(.send)
+          .padding(.leading, 14)
+          .padding(.trailing, 46)
+          .frame(minHeight: MobileMessageComposerLayout.height)
+          .onSubmit {
+            guard hasReplyDraft else { return }
+            attemptReply(for: conversation)
+          }
+          .onChange(of: draftBody) { _, value in
+            guard value.count > MessageReplyRequest.maximumBodyCharacterCount else { return }
+            draftBody = String(value.prefix(MessageReplyRequest.maximumBodyCharacterCount))
+          }
+          .accessibilityLabel("Message")
+          .accessibilityHint("Press Return to review this reply in Messages")
+          .disabled(replyActionIsBusy)
+          .background(PanelTheme.raisedSurface, in: Capsule())
+          .overlay {
+            Capsule()
+              .stroke(PanelTheme.primary.opacity(replyFieldFocused ? 0.16 : 0.08), lineWidth: 1)
+          }
+
+        Button(action: { performComposerAction(for: conversation) }) {
+          ZStack {
+            if replyActionIsBusy {
+              ProgressView()
+                .tint(PanelTheme.primary)
+                .scaleEffect(0.72)
+            } else if hasReplyDraft {
+              Image(systemName: "arrow.up")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(Color.white)
+            } else {
+              Image(systemName: replyDictation.isRecording ? "waveform" : "mic")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(
+                  replyDictation.isRecording ? PanelTheme.coral : PanelTheme.secondary
+                )
+            }
+          }
+          .frame(
+            width: MobileMessageComposerLayout.actionSize,
+            height: MobileMessageComposerLayout.actionSize
+          )
+          .background(hasReplyDraft ? PanelTheme.blue : Color.clear, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(replyActionIsBusy)
+        .accessibilityLabel(
+          hasReplyDraft
+            ? "Review reply in Messages"
+            : (replyDictation.isRecording ? "Stop message dictation" : "Dictate a message")
+        )
+        .accessibilityHint(
+          hasReplyDraft
+            ? "Opens Apple's composer; Send still requires your confirmation"
+            : "Uses on-device speech recognition to fill this reply"
+        )
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
       }
-      .frame(width: 78, alignment: .leading)
-      .frame(minHeight: 42, alignment: .leading)
-      .contentShape(Rectangle())
+      .frame(minHeight: 44)
+      .padding(.horizontal, 14)
+      .padding(.vertical, 8)
+      .animation(PanelTheme.quick, value: hasReplyDraft)
     }
-    .accessibilityLabel("Reply recipients")
-    .accessibilityValue(recipientSummary(in: recipients))
   }
 
   private func eligibleRecipients(
@@ -899,26 +884,164 @@ private struct MessagesHistorySheet: View {
     eligibleRecipients(for: conversation).filter { selectedRecipientIDs.contains($0.id) }
   }
 
-  private func recipientSummary(in recipients: [MessageReplyRecipient]) -> String {
-    let selected = recipients.filter { selectedRecipientIDs.contains($0.id) }
-    if selected.isEmpty { return "Choose" }
-    return selected[0].displayName
+  private func reconcileRecipientSelection(for conversation: SyncedMessageConversation) {
+    let eligibleIDs = eligibleRecipients(for: conversation).map(\.id)
+    selectedRecipientIDs = eligibleIDs.count == 1
+      ? Set(eligibleIDs)
+      : Set<String>()
   }
 
-  private func reconcileRecipientSelection(for conversation: SyncedMessageConversation) {
-    let validIDs = Set(eligibleRecipients(for: conversation).map(\.id))
-    selectedRecipientIDs.formIntersection(validIDs)
-    if selectedRecipientIDs.count != 1 {
-      selectedRecipientIDs = eligibleRecipients(for: conversation).first
-        .map { Set([$0.id]) } ?? Set<String>()
+  private var hasReplyDraft: Bool {
+    !draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  private var replyActionIsBusy: Bool {
+    isPreparingReply || replyDictation.isStarting || replyDictation.isStopping
+  }
+
+  private func replyPlaceholder(for conversation: SyncedMessageConversation) -> String {
+    let service = conversation.serviceName?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased() ?? ""
+    return service.contains("sms") || service.contains("rcs")
+      ? "Text Message"
+      : "iMessage"
+  }
+
+  private func performComposerAction(for conversation: SyncedMessageConversation) {
+    if hasReplyDraft {
+      attemptReply(for: conversation)
+    } else {
+      toggleReplyDictation()
     }
   }
 
-  private func canOpenComposer(for conversation: SyncedMessageConversation) -> Bool {
-    !conversation.isGroup
-      && replyTransport.canSendText()
-      && selectedRecipients(for: conversation).count == 1
-      && !draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  private func toggleReplyDictation() {
+    composerTask?.cancel()
+    let generation = composerLifecycleGeneration
+    composerTask = Task { @MainActor in
+      guard isComposerOperationActive(generation) else { return }
+      if replyDictation.isRecording {
+        let transcript = await replyDictation.stop()
+        guard isComposerOperationActive(generation) else { return }
+        applyDictationTranscript(transcript)
+        lastAppliedDictationDraft = nil
+        replyDictation.reset()
+        replyFieldFocused = true
+        return
+      }
+
+      dictationBase = draftBody
+      lastAppliedDictationDraft = draftBody
+      replyFieldFocused = false
+      let didStart = await replyDictation.start()
+      guard isComposerOperationActive(generation) else { return }
+      if !didStart {
+        lastAppliedDictationDraft = nil
+      }
+    }
+  }
+
+  private func applyDictationTranscript(_ transcript: String) {
+    let resolved = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !resolved.isEmpty else { return }
+    guard let lastAppliedDictationDraft,
+          draftBody == lastAppliedDictationDraft
+    else { return }
+    let separator = dictationBase.isEmpty || dictationBase.last?.isWhitespace == true
+      ? "" : " "
+    let updatedDraft = String(
+      (dictationBase + separator + resolved)
+        .prefix(MessageReplyRequest.maximumBodyCharacterCount)
+    )
+    draftBody = updatedDraft
+    self.lastAppliedDictationDraft = updatedDraft
+  }
+
+  private func attemptReply(for conversation: SyncedMessageConversation) {
+    guard !isPreparingReply else { return }
+    composerTask?.cancel()
+    isPreparingReply = true
+    let generation = composerLifecycleGeneration
+    composerTask = Task { @MainActor in
+      defer {
+        if generation == composerLifecycleGeneration {
+          isPreparingReply = false
+        }
+      }
+      guard isComposerOperationActive(generation) else { return }
+      if replyDictation.isRecording {
+        let transcript = await replyDictation.stop()
+        guard isComposerOperationActive(generation) else { return }
+        applyDictationTranscript(transcript)
+        lastAppliedDictationDraft = nil
+        replyDictation.reset()
+      }
+      guard isComposerOperationActive(generation) else { return }
+      guard hasReplyDraft else { return }
+      continueReplyAttempt(for: conversation, generation: generation)
+    }
+  }
+
+  private func scheduleReplyContinuation(for conversation: SyncedMessageConversation) {
+    composerTask?.cancel()
+    let generation = composerLifecycleGeneration
+    composerTask = Task { @MainActor in
+      await Task.yield()
+      guard isComposerOperationActive(generation) else { return }
+      continueReplyAttempt(for: conversation, generation: generation)
+    }
+  }
+
+  private func continueReplyAttempt(
+    for conversation: SyncedMessageConversation,
+    generation: Int
+  ) {
+    guard isComposerOperationActive(generation) else { return }
+    guard !conversation.isGroup else { return }
+    guard replyTransportEnabled else {
+      pendingReplyAfterEnable = true
+      replyAlert = .enable
+      return
+    }
+
+    reconcileRecipientSelection(for: conversation)
+    guard eligibleRecipients(for: conversation).count == 1,
+          selectedRecipients(for: conversation).count == 1
+    else {
+      replyAlert = .notice(
+        title: "Recipient unavailable",
+        message: "This conversation must have exactly one validated phone number before iAgent can prepare a reply."
+      )
+      return
+    }
+    guard replyTransport.canSendText() else {
+      replyAlert = .notice(
+        title: "Messages unavailable",
+        message: "Apple's message composer is not available on this iPhone."
+      )
+      return
+    }
+
+    guard isComposerOperationActive(generation) else { return }
+    replyFieldFocused = false
+    openSystemComposer(for: conversation)
+  }
+
+  private func isComposerOperationActive(_ generation: Int) -> Bool {
+    !Task.isCancelled && generation == composerLifecycleGeneration
+  }
+
+  private func handleReplyDictationError(_ message: String) {
+    let recoverableTranscript = replyDictation.transcript
+    composerLifecycleGeneration &+= 1
+    composerTask?.cancel()
+    composerTask = nil
+    isPreparingReply = false
+    applyDictationTranscript(recoverableTranscript)
+    lastAppliedDictationDraft = nil
+    replyDictation.reset()
+    replyAlert = .notice(title: "Dictation unavailable", message: message)
   }
 
   private func openSystemComposer(for conversation: SyncedMessageConversation) {
@@ -956,10 +1079,17 @@ private struct MessagesHistorySheet: View {
     MessageReplyPreferences.setEnabled(enabled, in: .standard)
     replyTransportEnabled = enabled
     if !enabled {
+      pendingReplyAfterEnable = false
       draftBody = ""
       composeRoute = nil
+      replyDictation.reset()
     }
   }
+}
+
+private enum MobileMessageComposerLayout {
+  static let height: CGFloat = 40
+  static let actionSize: CGFloat = 30
 }
 
 private struct MobileMessageComposeRoute: Identifiable {
