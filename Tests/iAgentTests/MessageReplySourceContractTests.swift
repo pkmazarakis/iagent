@@ -67,6 +67,68 @@ final class MessageReplySourceContractTests: XCTestCase {
     XCTAssertTrue(controller.contains("startMessageProviderUpdates()"))
   }
 
+  func testMacDirectComposerIsAlwaysPresentAndReplyEnablementIsLazy() throws {
+    let view = try source("Sources/iAgentPanel/MessageInboxViews.swift")
+    let composerStart = try XCTUnwrap(view.range(of: "private var replyComposer"))
+    let composerEnd = try XCTUnwrap(
+      view.range(of: "private var recipientControl", range: composerStart.upperBound..<view.endIndex)
+    )
+    let composer = String(view[composerStart.lowerBound..<composerEnd.lowerBound])
+
+    XCTAssertTrue(composer.contains("TextField(\"Write a reply\""))
+    XCTAssertTrue(composer.contains("attemptHandoff()"))
+    XCTAssertFalse(composer.contains("else if !controller.messageReplyTransportEnabled"))
+    XCTAssertFalse(composer.contains("else if eligibleRecipients.isEmpty"))
+    XCTAssertFalse(composer.contains("Button(\"Enable replies\")"))
+    XCTAssertFalse(composer.contains("Refreshing reply recipients"))
+    XCTAssertFalse(composer.contains("controller.isMessageInboxSyncing"))
+
+    let attemptStart = try XCTUnwrap(view.range(of: "private func attemptHandoff()"))
+    let attemptEnd = try XCTUnwrap(
+      view.range(
+        of: "private func beginRecipientResolution()",
+        range: attemptStart.upperBound..<view.endIndex
+      )
+    )
+    let attempt = String(view[attemptStart.lowerBound..<attemptEnd.lowerBound])
+    XCTAssertTrue(attempt.contains("if !controller.messageReplyTransportEnabled"))
+    XCTAssertTrue(attempt.contains("replyAlert = .enable"))
+    XCTAssertFalse(attempt.contains("setMessageReplyTransportEnabled(true)"))
+
+    let enableStart = try XCTUnwrap(view.range(of: "case .enable:"))
+    let enableEnd = try XCTUnwrap(
+      view.range(of: "case let .connectRequired", range: enableStart.upperBound..<view.endIndex)
+    )
+    let enableAlert = String(view[enableStart.lowerBound..<enableEnd.lowerBound])
+    XCTAssertTrue(enableAlert.contains("primaryButton: .cancel()"))
+    XCTAssertTrue(enableAlert.contains("setMessageReplyTransportEnabled(true)"))
+    XCTAssertTrue(enableAlert.contains("beginRecipientResolution()"))
+    XCTAssertFalse(enableAlert.contains("beginUserConfirmedHandoff"))
+  }
+
+  func testInitialMessagesBackfillStopsLoadingBeforeIdleUpdatesStream() throws {
+    let controller = try source("Sources/iAgentPanel/iAgentPanelApp.swift")
+    let start = try XCTUnwrap(controller.range(of: "private func startMessageProviderUpdates()"))
+    let end = try XCTUnwrap(
+      controller.range(
+        of: "private func finishMessageProviderBackfill",
+        range: start.upperBound..<controller.endIndex
+      )
+    )
+    let implementation = String(controller[start.lowerBound..<end.lowerBound])
+    let applied = try XCTUnwrap(implementation.range(of: "applyDesktopSyncState(initialState"))
+    let afterApplied = applied.upperBound..<implementation.endIndex
+    let finished = try XCTUnwrap(
+      implementation.range(of: "finishMessageProviderBackfill(refreshGeneration)", range: afterApplied)
+    )
+    let updates = try XCTUnwrap(
+      implementation.range(of: "for try await batch", range: afterApplied)
+    )
+
+    XCTAssertLessThan(finished.lowerBound, updates.lowerBound)
+    XCTAssertFalse(implementation.contains("var ingestedFirstUpdate = false"))
+  }
+
   func testProviderPublishesAddressesOnlyBehindDesktopOptIn() throws {
     let provider = try source("Sources/iAgentPanel/MessageInboxProvider.swift")
 

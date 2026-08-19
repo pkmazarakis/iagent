@@ -239,6 +239,43 @@ final class MessageInboxProviderTests: XCTestCase {
     XCTAssertFalse(batch.messages.contains { $0.body == "Too old" })
   }
 
+  func testLocalProviderResolvesOneReplyRecipientOnDemandWithoutPublishingIt() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent(
+        "iagent-message-reply-resolution-test-\(UUID().uuidString)",
+        isDirectory: true
+      )
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let databaseURL = root.appendingPathComponent("chat.db")
+    let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
+    let cutoffNanoseconds = Int64(
+      (cutoff.timeIntervalSinceReferenceDate * 1_000_000_000).rounded(.up)
+    )
+    try makeMessagesFixture(at: databaseURL, cutoffNanoseconds: cutoffNanoseconds)
+
+    let provider = LocalMacMessagesProvider(
+      databaseURL: databaseURL,
+      contactNameResolver: StubContactNameResolver(),
+      includesReplyAddresses: false
+    )
+    let privateSnapshot = try await provider.backfill(since: cutoff)
+    let conversation = try XCTUnwrap(privateSnapshot.conversations.first)
+    XCTAssertNil(conversation.participants.first?.replyAddress)
+
+    let recipients = try await provider.replyRecipients(
+      for: conversation.id,
+      since: cutoff
+    )
+    XCTAssertEqual(recipients.count, 1)
+    XCTAssertEqual(recipients.first?.address.value, "+15551234567")
+    XCTAssertEqual(recipients.first?.displayName, "+15551234567")
+
+    let stillPrivateSnapshot = try await provider.backfill(since: cutoff)
+    XCTAssertNil(stillPrivateSnapshot.conversations.first?.participants.first?.replyAddress)
+  }
+
   func testLocalProviderPrefersPhoneThenEmailForUnresolvedDirectParticipants() async throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent(

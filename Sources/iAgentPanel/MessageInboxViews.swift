@@ -346,8 +346,13 @@ private struct MessageConversationPage: View {
     @State private var replyTransport: any MacMessageReplyTransport
     @State private var draftBody = ""
     @State private var selectedRecipientIDs = Set<String>()
+    @State private var resolvedRecipients: [MessageReplyRecipient] = []
+    @State private var isResolvingRecipient = false
+    @State private var retryAfterMessagesAccess = false
+    @State private var recipientResolutionTask: Task<Void, Never>?
     @State private var pendingRequest: MessageReplyRequest?
     @State private var replyAlert: MacMessageReplyAlert?
+    @State private var replyStatusMessage: String?
 
     init(
         controller: PanelController,
@@ -375,7 +380,7 @@ private struct MessageConversationPage: View {
                 Text(
                     conversation.isGroup
                         ? "Read only"
-                        : controller.messageReplyTransportEnabled ? "Messages handoff" : "Read only"
+                        : "Messages handoff"
                 )
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(.white.opacity(0.3))
@@ -423,6 +428,33 @@ private struct MessageConversationPage: View {
         .onChange(of: eligibleRecipients.map(\.id)) {
             reconcileRecipientSelection()
         }
+        .onChange(of: controller.messageProviderAccess) {
+            guard retryAfterMessagesAccess else { return }
+            switch controller.messageProviderAccess {
+            case .authorized:
+                retryAfterMessagesAccess = false
+                isResolvingRecipient = false
+                beginRecipientResolution()
+            case let .permissionRequired(message):
+                retryAfterMessagesAccess = false
+                isResolvingRecipient = false
+                replyAlert = .accessRequired(accessPrompt(message))
+            case let .disabled(message):
+                retryAfterMessagesAccess = false
+                isResolvingRecipient = false
+                replyAlert = .connectRequired(accessPrompt(message))
+            case let .failed(message):
+                retryAfterMessagesAccess = false
+                isResolvingRecipient = false
+                replyAlert = .notice(title: "Messages unavailable", message: message)
+            case .loading:
+                break
+            }
+        }
+        .onDisappear {
+            recipientResolutionTask?.cancel()
+            recipientResolutionTask = nil
+        }
         .alert(item: $replyAlert) { alert in
             switch alert {
             case .enable:
@@ -432,8 +464,34 @@ private struct MessageConversationPage: View {
                         "This setting applies to every eligible one-to-one conversation in your rolling 14-day Messages inbox. iAgent will include validated recipient addresses in your private iCloud message projection so replies can also be prepared on iPhone. Every draft is handed to Apple's Messages UI for review; iAgent never presses Send or confirms delivery."
                     ),
                     primaryButton: .cancel(),
-                    secondaryButton: .default(Text("Enable")) {
+                    secondaryButton: .default(Text("Continue")) {
                         controller.setMessageReplyTransportEnabled(true)
+                        Task { @MainActor in
+                            await Task.yield()
+                            beginRecipientResolution()
+                        }
+                    }
+                )
+            case let .connectRequired(message):
+                Alert(
+                    title: Text("Connect Messages to reply?"),
+                    message: Text(message),
+                    primaryButton: .cancel(),
+                    secondaryButton: .default(Text("Connect Messages")) {
+                        retryAfterMessagesAccess = true
+                        controller.connectLocalMessages()
+                    }
+                )
+            case let .accessRequired(message):
+                Alert(
+                    title: Text("Allow Messages access to reply?"),
+                    message: Text(message),
+                    primaryButton: .cancel(),
+                    secondaryButton: .default(
+                        Text(controller.messageAccessRecoveryActionTitle)
+                    ) {
+                        retryAfterMessagesAccess = true
+                        controller.recoverLocalMessagesAccess()
                     }
                 )
             case .confirm:
@@ -484,49 +542,10 @@ private struct MessageConversationPage: View {
             .foregroundStyle(.white.opacity(0.42))
             .padding(.horizontal, PanelPageLayout.contentInset)
             .frame(minHeight: 50)
-        } else if !controller.messageReplyTransportEnabled {
-            HStack(spacing: 10) {
-                Label("Read-only inbox", systemImage: "lock")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.42))
-
-                Spacer(minLength: 12)
-
-                Button("Enable replies") {
-                    replyAlert = .enable
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(Color.agentBlue)
-                .frame(minHeight: 36)
-                .accessibilityHint("Explains the public, user-confirmed Messages handoff")
-            }
-            .padding(.horizontal, PanelPageLayout.contentInset)
-            .frame(minHeight: 48)
-        } else if eligibleRecipients.isEmpty {
-            HStack(spacing: 9) {
-                Image(systemName: "person.crop.circle.badge.exclamationmark")
-                Text(
-                    controller.isMessageInboxSyncing
-                        ? "Refreshing reply recipients…"
-                        : "No validated reply recipient is available."
-                )
-                .lineLimit(2)
-
-                Spacer(minLength: 10)
-
-                Button("Turn off") { setReplyTransportEnabled(false) }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color.agentBlue)
-            }
-            .font(.system(size: 9.5, weight: .medium))
-            .foregroundStyle(.white.opacity(0.42))
-            .padding(.horizontal, PanelPageLayout.contentInset)
-            .frame(minHeight: 50)
         } else {
             VStack(spacing: 5) {
                 HStack(spacing: 8) {
-                    recipientMenu
+                    recipientControl
 
                     TextField("Write a reply", text: $draftBody, axis: .vertical)
                         .textFieldStyle(.plain)
@@ -548,23 +567,31 @@ private struct MessageConversationPage: View {
                         }
 
                     Button {
-                        prepareHandoffConfirmation()
+                        attemptHandoff()
                     } label: {
-                        Image(systemName: "arrow.up.right.square")
-                            .font(.system(size: 11, weight: .semibold))
-                            .frame(width: 30, height: 30)
-                            .background(
-                                canPrepareHandoff
-                                    ? Color.agentBlue.opacity(0.2)
-                                    : Color.white.opacity(0.04),
-                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            )
+                        Group {
+                            if isResolvingRecipient {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .scaleEffect(0.72)
+                            } else {
+                                Image(systemName: "arrow.up.right.square")
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                        }
+                        .frame(width: 30, height: 30)
+                        .background(
+                            canAttemptHandoff
+                                ? Color.agentBlue.opacity(0.2)
+                                : Color.white.opacity(0.04),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        )
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(
-                        canPrepareHandoff ? Color.agentBlue : Color.white.opacity(0.24)
+                        canAttemptHandoff ? Color.agentBlue : Color.white.opacity(0.24)
                     )
-                    .disabled(!canPrepareHandoff)
+                    .disabled(!canAttemptHandoff)
                     .help("Review in Messages")
                     .accessibilityLabel("Review reply in Messages")
                     .accessibilityHint(
@@ -573,16 +600,40 @@ private struct MessageConversationPage: View {
                 }
 
                 HStack {
-                    Text("No background send · Messages asks you to review")
+                    Text(
+                        isResolvingRecipient
+                            ? "Confirming the reply recipient…"
+                            : replyStatusMessage
+                                ?? "Opens Messages for review · no background send"
+                    )
                     Spacer(minLength: 10)
-                    Button("Turn off") { setReplyTransportEnabled(false) }
-                        .buttonStyle(.plain)
                 }
                 .font(.system(size: 8.5, weight: .medium))
                 .foregroundStyle(.white.opacity(0.28))
             }
             .padding(.horizontal, PanelPageLayout.contentInset)
             .padding(.vertical, 8)
+        }
+    }
+
+    @ViewBuilder
+    private var recipientControl: some View {
+        if eligibleRecipients.count > 1 {
+            recipientMenu
+        } else {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("TO")
+                    .font(.system(size: 7.5, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.26))
+                Text(recipientSummary)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.58))
+                    .lineLimit(1)
+            }
+            .frame(width: 82, height: 30, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Reply recipient")
+            .accessibilityValue(recipientSummary)
         }
     }
 
@@ -622,7 +673,11 @@ private struct MessageConversationPage: View {
 
     private var eligibleRecipients: [MessageReplyRecipient] {
         guard !conversation.isGroup else { return [] }
-        return conversation.participants.compactMap(MessageReplyRecipient.init(participant:))
+        let projected = conversation.participants.compactMap(
+            MessageReplyRecipient.init(participant:)
+        )
+        var seenIDs = Set<String>()
+        return (projected + resolvedRecipients).filter { seenIDs.insert($0.id).inserted }
     }
 
     private var selectedRecipients: [MessageReplyRecipient] {
@@ -630,14 +685,13 @@ private struct MessageConversationPage: View {
     }
 
     private var recipientSummary: String {
-        if selectedRecipients.isEmpty { return "Choose" }
-        return selectedRecipients[0].displayName
+        selectedRecipients.first?.displayName ?? conversation.displayName
     }
 
-    private var canPrepareHandoff: Bool {
+    private var canAttemptHandoff: Bool {
         !conversation.isGroup
-            && selectedRecipients.count == 1
             && !draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !isResolvingRecipient
     }
 
     private func reconcileRecipientSelection() {
@@ -647,6 +701,91 @@ private struct MessageConversationPage: View {
             selectedRecipientIDs = eligibleRecipients.first.map { Set([$0.id]) }
                 ?? Set<String>()
         }
+    }
+
+    private func attemptHandoff() {
+        guard canAttemptHandoff else { return }
+        replyStatusMessage = nil
+        if !controller.messageReplyTransportEnabled {
+            replyAlert = .enable
+            return
+        }
+        beginRecipientResolution()
+    }
+
+    private func beginRecipientResolution() {
+        guard !conversation.isGroup else { return }
+        if selectedRecipients.count == 1 {
+            prepareHandoffConfirmation()
+            return
+        }
+
+        switch controller.messageProviderAccess {
+        case let .disabled(message):
+            replyAlert = .connectRequired(accessPrompt(message))
+            return
+        case let .permissionRequired(message):
+            replyAlert = .accessRequired(accessPrompt(message))
+            return
+        case let .failed(message):
+            replyAlert = .notice(title: "Messages unavailable", message: message)
+            return
+        case .loading:
+            retryAfterMessagesAccess = true
+            isResolvingRecipient = true
+            return
+        case .authorized:
+            break
+        }
+
+        recipientResolutionTask?.cancel()
+        isResolvingRecipient = true
+        let conversationID = conversation.id
+        recipientResolutionTask = Task { @MainActor in
+            do {
+                let recipients = try await controller.resolveMessageReplyRecipients(
+                    for: conversationID
+                )
+                try Task.checkCancellation()
+                resolvedRecipients = recipients
+                reconcileRecipientSelection()
+                isResolvingRecipient = false
+                recipientResolutionTask = nil
+                if selectedRecipients.count == 1 {
+                    prepareHandoffConfirmation()
+                } else {
+                    presentRecipientResolutionIssue()
+                }
+            } catch is CancellationError {
+                isResolvingRecipient = false
+                recipientResolutionTask = nil
+            } catch {
+                isResolvingRecipient = false
+                recipientResolutionTask = nil
+                presentRecipientResolutionIssue(fallback: error.localizedDescription)
+            }
+        }
+    }
+
+    private func presentRecipientResolutionIssue(fallback: String? = nil) {
+        switch controller.messageProviderAccess {
+        case let .disabled(message):
+            replyAlert = .connectRequired(accessPrompt(message))
+        case let .permissionRequired(message):
+            replyAlert = .accessRequired(accessPrompt(message))
+        case let .failed(message):
+            replyAlert = .notice(title: "Messages unavailable", message: message)
+        case .loading, .authorized:
+            replyAlert = .notice(
+                title: "Recipient unavailable",
+                message: fallback
+                    ?? "iAgent could not confirm a safe reply address for this conversation. Your draft is still here."
+            )
+        }
+    }
+
+    private func accessPrompt(_ detail: String) -> String {
+        "\(detail)\n\nYour draft stays here. After access is granted, iAgent will continue preparing it for review in Messages."
     }
 
     private func prepareHandoffConfirmation() {
@@ -669,10 +808,7 @@ private struct MessageConversationPage: View {
         defer { pendingRequest = nil }
         do {
             _ = try replyTransport.beginUserConfirmedHandoff(request)
-            replyAlert = .notice(
-                title: "Messages handoff requested",
-                message: "macOS received the handoff request. If Messages opens, review the recipient and draft there, then choose whether to Send. iAgent cannot confirm that the compose window opened, the message was sent, or delivered."
-            )
+            replyStatusMessage = "Messages handoff requested · finish the draft in Messages"
         } catch {
             replyAlert = .notice(
                 title: "Messages handoff unavailable",
@@ -692,6 +828,8 @@ private struct MessageConversationPage: View {
 
 private enum MacMessageReplyAlert: Identifiable {
     case enable
+    case connectRequired(String)
+    case accessRequired(String)
     case confirm
     case notice(title: String, message: String)
 
@@ -699,6 +837,10 @@ private enum MacMessageReplyAlert: Identifiable {
         switch self {
         case .enable:
             "enable"
+        case let .connectRequired(message):
+            "connect:\(message)"
+        case let .accessRequired(message):
+            "access:\(message)"
         case .confirm:
             "confirm"
         case let .notice(title, message):

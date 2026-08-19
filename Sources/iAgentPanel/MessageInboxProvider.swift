@@ -93,7 +93,24 @@ struct MessageProviderBatch: Sendable {
 protocol MacMessageProviding: Sendable {
   func authorizationStatus() async -> MessageProviderAccessState
   func backfill(since: Date) async throws -> MessageProviderBatch
+  func replyRecipients(
+    for conversationID: String,
+    since cutoff: Date
+  ) async throws -> [MessageReplyRecipient]
   func updates(since: Date) -> AsyncThrowingStream<MessageProviderBatch, Error>
+}
+
+extension MacMessageProviding {
+  func replyRecipients(
+    for conversationID: String,
+    since cutoff: Date
+  ) async throws -> [MessageReplyRecipient] {
+    let snapshot = try await backfill(since: cutoff)
+    guard let conversation = snapshot.conversations.first(where: { $0.id == conversationID }),
+          !conversation.isGroup
+    else { return [] }
+    return conversation.participants.compactMap(MessageReplyRecipient.init(participant:))
+  }
 }
 
 protocol MessageContactNameResolving: Sendable {
@@ -1281,6 +1298,34 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
         contactNameResolver: contactNameResolver,
         includesReplyAddresses: includesReplyAddresses
       )
+    }.value
+  }
+
+  /// Resolves the routing data for one explicit user action without waiting
+  /// for the full inbox snapshot to be persisted and synchronized. The
+  /// address remains provider-authored; display names and opaque IDs are never
+  /// treated as destinations.
+  func replyRecipients(
+    for conversationID: String,
+    since cutoff: Date
+  ) async throws -> [MessageReplyRecipient] {
+    let databaseURL = databaseURL
+    let contactNameResolver = contactNameResolver
+    let effectiveCutoff = max(
+      cutoff,
+      MessageSyncWindow.cutoff(referenceDate: Date())
+    )
+    return try await Task.detached(priority: .userInitiated) {
+      let snapshot = try Self.loadSnapshot(
+        from: databaseURL,
+        since: effectiveCutoff,
+        contactNameResolver: contactNameResolver,
+        includesReplyAddresses: true
+      )
+      guard let conversation = snapshot.conversations.first(where: { $0.id == conversationID }),
+            !conversation.isGroup
+      else { return [] }
+      return conversation.participants.compactMap(MessageReplyRecipient.init(participant:))
     }.value
   }
 

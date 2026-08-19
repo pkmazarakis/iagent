@@ -1238,18 +1238,18 @@ final class PanelController: ObservableObject {
                 let initialState = await self.desktopSync.ingestMessageBatch(backfill)
                 self.applyDesktopSyncState(initialState, basedOn: nil)
                 self.markSelectedMessageConversationReadIfNeeded()
+                // The authoritative snapshot is usable as soon as it has been
+                // applied. A healthy updates stream can stay open indefinitely
+                // without yielding, so it must not keep the inbox in a loading
+                // state while it waits for the next source change.
+                self.finishMessageProviderBackfill(refreshGeneration)
 
-                var ingestedFirstUpdate = false
                 for try await batch in self.messageProvider.updates(since: cutoff) {
                     guard !Task.isCancelled else { return }
                     self.referenceNow = Date()
                     let nextState = await self.desktopSync.ingestMessageBatch(batch)
                     self.applyDesktopSyncState(nextState, basedOn: nil)
                     self.markSelectedMessageConversationReadIfNeeded()
-                    if !ingestedFirstUpdate {
-                        ingestedFirstUpdate = true
-                        self.finishMessageProviderBackfill(refreshGeneration)
-                    }
                 }
                 self.finishMessageProviderBackfill(refreshGeneration)
             } catch is CancellationError {
@@ -1322,6 +1322,21 @@ final class PanelController: ObservableObject {
         )
         messageProviderAccess = .loading
         startMessageProviderUpdates()
+    }
+
+    func resolveMessageReplyRecipients(
+        for conversationID: String
+    ) async throws -> [MessageReplyRecipient] {
+        let provider = messageProvider
+        do {
+            return try await provider.replyRecipients(
+                for: conversationID,
+                since: MessageSyncWindow.cutoff()
+            )
+        } catch {
+            messageProviderAccess = MacMessageProviderFactory.accessState(for: error)
+            throw error
+        }
     }
 
     var messageAccessRecoveryActionTitle: String {
