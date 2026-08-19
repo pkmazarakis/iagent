@@ -1,4 +1,4 @@
-import Darwin
+import Carbon
 import Foundation
 import SQLite3
 import iAgentCore
@@ -15,43 +15,46 @@ private struct MessagesAppleScriptCommand: Equatable, Sendable {
   let arguments: [String]
 }
 
-/// Runs a fixed AppleScript in a killable child process. User-controlled text
-/// exists only in argv; it is never code and never written to the script.
+/// Runs a fixed AppleScript inside the entitled app process. User-controlled
+/// text exists only in an Apple event argument list; it is never code and is
+/// never written to the script.
+///
+/// A sandboxed `Process` child inherits the parent's sandbox profile, but the
+/// system `/usr/bin/osascript` executable is separately signed and cannot use
+/// this app's Messages Apple Events exception. Running that executable from a
+/// TestFlight build therefore fails with `errAEPrivilegeError` (-10004). An
+/// in-process `NSAppleScript` sends as iAgent's own audit identity and can use
+/// the entitlements and user consent attached to the signed app.
 struct MessagesAppleScriptExecutor: Sendable {
-  /// The first send may remain blocked while the user reads macOS's Automation
-  /// consent prompt. Keep that user-controlled path comfortable but finite.
+  /// AppleScript applies this timeout to the Messages Apple event itself. If
+  /// the timeout starts after dispatch, the structured phase marker keeps the
+  /// result uncertain and prevents an automatic duplicate send.
   static let timeout: TimeInterval = 60
-  static let executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
 
-  static var isAvailable: Bool {
-    FileManager.default.isExecutableFile(atPath: executableURL.path)
-  }
+  static var isAvailable: Bool { true }
 
   static let scriptSource = """
-    on run argv
+    on iagent_send(theRecipient, theMessage, theService, targetChatID)
         set dispatchPhase to "pre_dispatch"
         try
-            set theRecipient to item 1 of argv
-            set theMessage to item 2 of argv
-            set theService to item 3 of argv
-            set targetChatID to item 4 of argv
-
-            tell application id "com.apple.MobileSMS"
-                if targetChatID is not "" then
-                    set targetChat to chat id targetChatID
-                    set dispatchPhase to "dispatch_started"
-                    send theMessage to targetChat
-                else
-                    if theService is "sms" then
-                        set targetService to first service whose service type is SMS
+            with timeout of \(Int(timeout)) seconds
+                tell application id "com.apple.MobileSMS"
+                    if targetChatID is not "" then
+                        set targetChat to chat id targetChatID
+                        set dispatchPhase to "dispatch_started"
+                        send theMessage to targetChat
                     else
-                        set targetService to first service whose service type is iMessage
+                        if theService is "sms" then
+                            set targetService to first service whose service type is SMS
+                        else
+                            set targetService to first service whose service type is iMessage
+                        end if
+                        set targetBuddy to buddy theRecipient of targetService
+                        set dispatchPhase to "dispatch_started"
+                        send theMessage to targetBuddy
                     end if
-                    set targetBuddy to buddy theRecipient of targetService
-                    set dispatchPhase to "dispatch_started"
-                    send theMessage to targetBuddy
-                end if
-            end tell
+                end tell
+            end timeout
             return "IAGENT_RESULT" & tab & "ok" & tab & "completed" & tab & "0"
         on error errorMessage number errorNumber
             if dispatchPhase is "pre_dispatch" then
@@ -59,7 +62,7 @@ struct MessagesAppleScriptExecutor: Sendable {
             end if
             return "IAGENT_RESULT" & tab & "failure" & tab & "may_have_completed" & tab & errorNumber
         end try
-    end run
+    end iagent_send
     """
 
   static func command(
@@ -74,6 +77,7 @@ struct MessagesAppleScriptExecutor: Sendable {
     )
   }
 
+  @MainActor
   fileprivate func send(
     recipient: String,
     body: String,
@@ -81,7 +85,7 @@ struct MessagesAppleScriptExecutor: Sendable {
     chatGUID: String?
   ) -> MessagesDirectDispatchDisposition {
     guard Self.isAvailable else {
-      return .unavailable("The bounded AppleScript runner is unavailable.")
+      return .unavailable("The in-process AppleScript runner is unavailable.")
     }
     let specification = Self.command(
       recipient: recipient,
@@ -96,115 +100,55 @@ struct MessagesAppleScriptExecutor: Sendable {
     return Self.run(command)
   }
 
+  @MainActor
   private static func run(
     _ command: MessagesAppleScriptCommand
   ) -> MessagesDirectDispatchDisposition {
-    let process = Process()
-    process.executableURL = executableURL
-    // This mirrors imsg's injection-safe argv boundary. A same-user process
-    // inspector can observe argv during the bounded child lifetime, so never
-    // log it and never persist it; the benefit is that user text is not code.
-    process.arguments = ["-l", "AppleScript", "-"] + command.arguments
-    let stdinPipe = Pipe()
-
-    let captureDirectory = FileManager.default.temporaryDirectory
-      .appendingPathComponent("iagent-messages-send-\(UUID().uuidString)", isDirectory: true)
-    let stdoutURL = captureDirectory.appendingPathComponent("stdout", isDirectory: false)
-    let stderrURL = captureDirectory.appendingPathComponent("stderr", isDirectory: false)
-
-    do {
-      try FileManager.default.createDirectory(
-        at: captureDirectory,
-        withIntermediateDirectories: true,
-        attributes: [.posixPermissions: 0o700]
-      )
-      guard FileManager.default.createFile(atPath: stdoutURL.path, contents: nil),
-            FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
-      else {
-        try? FileManager.default.removeItem(at: captureDirectory)
-        return .unavailable("The bounded AppleScript runner could not prepare output capture.")
-      }
-      try FileManager.default.setAttributes(
-        [.posixPermissions: 0o600],
-        ofItemAtPath: stdoutURL.path
-      )
-      try FileManager.default.setAttributes(
-        [.posixPermissions: 0o600],
-        ofItemAtPath: stderrURL.path
-      )
-    } catch {
-      try? FileManager.default.removeItem(at: captureDirectory)
-      return .unavailable("The bounded AppleScript runner could not prepare output capture.")
+    guard let script = NSAppleScript(source: command.source) else {
+      return .unavailable("The in-process AppleScript runner could not be created.")
     }
-    defer { try? FileManager.default.removeItem(at: captureDirectory) }
-
-    guard let stdoutHandle = FileHandle(forWritingAtPath: stdoutURL.path),
-          let stderrHandle = FileHandle(forWritingAtPath: stderrURL.path)
-    else {
-      return .unavailable("The bounded AppleScript runner could not open output capture.")
-    }
-    defer {
-      try? stdoutHandle.close()
-      try? stderrHandle.close()
-    }
-    process.standardInput = stdinPipe
-    process.standardOutput = stdoutHandle
-    process.standardError = stderrHandle
-
-    do {
-      try process.run()
-    } catch {
-      try? stdinPipe.fileHandleForWriting.close()
-      return .unavailable("The bounded AppleScript runner could not be launched.")
+    var compileError: NSDictionary?
+    guard script.compileAndReturnError(&compileError) else {
+      return .unavailable("The in-process AppleScript runner could not be compiled.")
     }
 
-    do {
-      try stdinPipe.fileHandleForWriting.write(contentsOf: Data(command.source.utf8))
-      try stdinPipe.fileHandleForWriting.close()
-    } catch {
-      terminateAndReap(process)
+    let event = invocationEvent(arguments: command.arguments)
+
+    var executionError: NSDictionary?
+    let result = script.executeAppleEvent(event, error: &executionError)
+    guard executionError == nil else {
+      // A handler-level error is caught by the fixed script and includes its
+      // dispatch phase. Reaching this path means the runner itself could not
+      // return a trustworthy result; never invite an automatic retry.
       return .outcomeUncertain(
-        "The Messages automation input channel failed after launch. Do not retry automatically."
+        "Messages automation returned no trustworthy dispatch result. Do not retry automatically."
       )
     }
-
-    let deadline = Date().addingTimeInterval(timeout)
-    while process.isRunning, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.02)
-    }
-    if process.isRunning {
-      terminateAndReap(process)
-      return .outcomeUncertain(
-        "Messages automation did not finish within \(Int(timeout)) seconds. It may still have sent the message; do not retry automatically."
-      )
-    }
-
-    process.waitUntilExit()
-    try? stdoutHandle.synchronize()
-    guard process.terminationReason == .exit, process.terminationStatus == 0 else {
-      return .outcomeUncertain(
-        "Messages automation exited without a trustworthy dispatch result. Do not retry automatically."
-      )
-    }
-
-    let output = (try? String(contentsOf: stdoutURL, encoding: .utf8)) ?? ""
-    return interpret(output)
+    return interpret(result.stringValue ?? "")
   }
 
-  private static func terminateAndReap(_ process: Process) {
-    guard process.isRunning else {
-      process.waitUntilExit()
-      return
+  @MainActor
+  static func invocationEvent(arguments: [String]) -> NSAppleEventDescriptor {
+    let event = NSAppleEventDescriptor(
+      eventClass: AEEventClass(kASAppleScriptSuite),
+      eventID: AEEventID(kASSubroutineEvent),
+      targetDescriptor: nil,
+      returnID: AEReturnID(kAutoGenerateReturnID),
+      transactionID: AETransactionID(kAnyTransactionID)
+    )
+    event.setParam(
+      NSAppleEventDescriptor(string: "iagent_send"),
+      forKeyword: AEKeyword(keyASSubroutineName)
+    )
+    let argumentList = NSAppleEventDescriptor.list()
+    for (index, argument) in arguments.enumerated() {
+      argumentList.insert(
+        NSAppleEventDescriptor(string: argument),
+        at: index + 1
+      )
     }
-    process.terminate()
-    let graceDeadline = Date().addingTimeInterval(0.5)
-    while process.isRunning, Date() < graceDeadline {
-      Thread.sleep(forTimeInterval: 0.01)
-    }
-    if process.isRunning {
-      Darwin.kill(process.processIdentifier, SIGKILL)
-    }
-    process.waitUntilExit()
+    event.setParam(argumentList, forKeyword: AEKeyword(keyDirectObject))
+    return event
   }
 
   static func interpret(_ output: String) -> MessagesDirectDispatchDisposition {
@@ -627,14 +571,16 @@ struct MessagesDirectSendPipeline: Sendable {
   func send(
     _ request: MessageReplyRequest,
     service: MacMessageReplyService
-  ) throws -> MacMessageReplySendResult {
+  ) async throws -> MacMessageReplySendResult {
     let payload = try DirectMessagesReplyTransport.payload(for: request)
     let verifier = MessagesOutgoingVerifier(databaseURL: databaseURL)
-    let verification = verifier.prepare(
-      recipient: payload.recipient,
-      service: service
-    )
-    let dispatch = MessagesAppleScriptExecutor().send(
+    let verification = await Task.detached(priority: .userInitiated) {
+      verifier.prepare(
+        recipient: payload.recipient,
+        service: service
+      )
+    }.value
+    let dispatch = await MessagesAppleScriptExecutor().send(
       recipient: payload.recipient,
       body: payload.body,
       service: service,
@@ -648,9 +594,21 @@ struct MessagesDirectSendPipeline: Sendable {
           "Messages accepted the send, but its outgoing database was unavailable for verification. The message may have sent; do not retry automatically."
         )
       }
-      guard let row = verifier.verify(body: payload.body, context: verification) else {
+      let verificationResult: (row: MessagesOutgoingRow?, ghostRowID: Int64?) =
+        await Task.detached(priority: .userInitiated) {
+          if let row = verifier.verify(body: payload.body, context: verification) {
+            return (row: row, ghostRowID: nil)
+          }
+          return (
+            row: nil,
+            ghostRowID: verifier.unjoinedEmptyOutgoingRow(context: verification)
+          )
+        }.value
+      let row = verificationResult.row
+      let ghostRowID = verificationResult.ghostRowID
+      guard let row else {
         return Self.missingVerificationResult(
-          ghostRowID: verifier.unjoinedEmptyOutgoingRow(context: verification)
+          ghostRowID: ghostRowID
         )
       }
       return .sent(

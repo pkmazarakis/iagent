@@ -210,7 +210,7 @@ final class MessageReplySourceContractTests: XCTestCase {
     XCTAssertTrue(composer.contains(".disabled(replyActionIsBusy)"))
   }
 
-  func testMacUsesBoundedPublicAppleScriptWithExplicitComposeFallback() throws {
+  func testMacUsesEntitledInProcessAppleScriptWithExplicitComposeFallback() throws {
     let transport = try source("Sources/iAgentPanel/MessageReplyTransport.swift")
     let pipeline = try source("Sources/iAgentPanel/MessagesDirectSendPipeline.swift")
     let view = try source("Sources/iAgentPanel/MessageInboxViews.swift")
@@ -239,11 +239,16 @@ final class MessageReplySourceContractTests: XCTestCase {
     XCTAssertFalse(transport.lowercased().contains("scriptingbridge"))
     XCTAssertFalse(transport.contains("IMCore"))
 
-    XCTAssertTrue(pipeline.contains("/usr/bin/osascript"))
-    XCTAssertTrue(pipeline.contains("process.arguments = [\"-l\", \"AppleScript\", \"-\"] + command.arguments"))
+    XCTAssertTrue(pipeline.contains("NSAppleScript(source: command.source)"))
+    XCTAssertTrue(pipeline.contains("eventID: AEEventID(kASSubroutineEvent)"))
+    XCTAssertTrue(pipeline.contains("forKeyword: AEKeyword(keyASSubroutineName)"))
+    XCTAssertTrue(pipeline.contains("let argumentList = NSAppleEventDescriptor.list()"))
+    XCTAssertTrue(pipeline.contains("event.setParam(argumentList, forKeyword: AEKeyword(keyDirectObject))"))
     XCTAssertTrue(pipeline.contains("tell application id \"com.apple.MobileSMS\""))
     XCTAssertTrue(pipeline.contains("static let timeout: TimeInterval = 60"))
-    XCTAssertTrue(pipeline.contains("Darwin.kill(process.processIdentifier, SIGKILL)"))
+    XCTAssertTrue(pipeline.contains(#"with timeout of \(Int(timeout)) seconds"#))
+    XCTAssertTrue(pipeline.contains("@MainActor\n  private static func run"))
+    XCTAssertTrue(pipeline.contains("await Task.detached(priority: .userInitiated)"))
     XCTAssertTrue(pipeline.contains("[recipient, body, service.appleScriptValue, chatGUID ?? \"\"]"))
     XCTAssertTrue(pipeline.contains("PRAGMA query_only = ON"))
     XCTAssertTrue(pipeline.contains("m.ROWID > ?2"))
@@ -251,7 +256,11 @@ final class MessageReplySourceContractTests: XCTestCase {
     XCTAssertTrue(pipeline.contains("MessageAttributedBodyDecoder.decode"))
     XCTAssertTrue(pipeline.contains("contains(body)"))
     XCTAssertTrue(pipeline.contains("do not retry automatically"))
+    XCTAssertFalse(pipeline.contains("process.executableURL"))
+    XCTAssertFalse(pipeline.contains("let process = Process()"))
+    XCTAssertFalse(pipeline.contains("Darwin.kill"))
     XCTAssertFalse(pipeline.contains("IMCore"))
+    XCTAssertFalse(transport.contains("Task.detached"))
 
     XCTAssertTrue(view.contains("replyTransport: DirectMessagesReplyTransport()"))
     XCTAssertTrue(view.contains("sendUserInitiated("))

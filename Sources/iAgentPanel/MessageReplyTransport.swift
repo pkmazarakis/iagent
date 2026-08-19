@@ -114,9 +114,9 @@ protocol MacMessageReplyTransport: AnyObject {
 /// used by openclaw/imsg. It intentionally does not import IMsgCore, inject
 /// code, use private frameworks, or automate Messages' UI.
 ///
-/// Recipient and body are passed as osascript arguments to a fixed script and
-/// are never interpolated into AppleScript source. The child process and the
-/// outgoing-row verification window are both bounded.
+/// Recipient and body are passed in an Apple event descriptor list to a fixed
+/// script and are never interpolated into AppleScript source. The Messages
+/// event and the outgoing-row verification window are both bounded.
 @MainActor
 final class DirectMessagesReplyTransport: MacMessageReplyTransport {
   typealias DirectSendOperation = @Sendable (
@@ -145,12 +145,10 @@ final class DirectMessagesReplyTransport: MacMessageReplyTransport {
             ?? LocalMacMessagesProvider.accountMessagesDatabaseURL()
         }
       }
-      return try await Task.detached(priority: .userInitiated) {
-        try MessagesDirectSendPipeline(databaseURL: resolvedDatabaseURL).send(
-          request,
-          service: service
-        )
-      }.value
+      return try await MessagesDirectSendPipeline(databaseURL: resolvedDatabaseURL).send(
+        request,
+        service: service
+      )
     }
     self.fallback = fallback
   }

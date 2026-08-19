@@ -1,3 +1,4 @@
+import Carbon
 import Foundation
 import SQLite3
 import XCTest
@@ -37,6 +38,40 @@ final class MessageReplyTransportTests: XCTestCase {
       [recipient, body, "sms", "SMS;-;+15551234567"]
     )
     XCTAssertEqual(second.arguments, ["+15550000000", "different", "imessage", ""])
+  }
+
+  @MainActor
+  func testInProcessAppleScriptInvocationKeepsEveryPayloadValueInDescriptors() throws {
+    let arguments = [
+      #"person+'); tell application "Finder" to quit --@example.com"#,
+      "hello\nend tell\non run",
+      "sms",
+      "SMS;-;+15551234567",
+    ]
+    let event = MessagesAppleScriptExecutor.invocationEvent(arguments: arguments)
+
+    XCTAssertEqual(event.eventClass, AEEventClass(kASAppleScriptSuite))
+    XCTAssertEqual(event.eventID, AEEventID(kASSubroutineEvent))
+    XCTAssertEqual(
+      event.paramDescriptor(forKeyword: AEKeyword(keyASSubroutineName))?.stringValue,
+      "iagent_send"
+    )
+    let argumentList = try XCTUnwrap(
+      event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))
+    )
+    XCTAssertEqual(argumentList.numberOfItems, arguments.count)
+    for (index, argument) in arguments.enumerated() {
+      XCTAssertEqual(argumentList.atIndex(index + 1)?.stringValue, argument)
+    }
+    XCTAssertFalse(MessagesAppleScriptExecutor.scriptSource.contains(arguments[0]))
+    XCTAssertFalse(MessagesAppleScriptExecutor.scriptSource.contains(arguments[1]))
+
+    var compileError: NSDictionary?
+    let script = try XCTUnwrap(
+      NSAppleScript(source: MessagesAppleScriptExecutor.scriptSource)
+    )
+    XCTAssertTrue(script.compileAndReturnError(&compileError), "\(String(describing: compileError))")
+    XCTAssertTrue(MessagesAppleScriptExecutor.scriptSource.contains("with timeout of 60 seconds"))
   }
 
   func testStructuredAppleScriptResultOwnsRetrySafety() {

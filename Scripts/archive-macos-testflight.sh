@@ -101,6 +101,13 @@ done
 /usr/bin/strings "$ARCHIVED_EXECUTABLE" \
   | /usr/bin/grep -F 'Select a conversation' >/dev/null \
   || fail "compiled split Messages detail placeholder is missing"
+/usr/bin/strings "$ARCHIVED_EXECUTABLE" \
+  | /usr/bin/grep -F 'The in-process AppleScript runner could not be created.' >/dev/null \
+  || fail "compiled in-process Messages automation runner is missing"
+if /usr/bin/strings "$ARCHIVED_EXECUTABLE" \
+  | /usr/bin/grep -F '/usr/bin/osascript' >/dev/null; then
+  fail "obsolete child-process Messages automation runner is still compiled"
+fi
 if /usr/bin/strings "$ARCHIVED_EXECUTABLE" \
   | /usr/bin/grep -F 'Refreshing reply recipients' >/dev/null; then
   fail "obsolete blocking reply-recipient UI is still compiled"
