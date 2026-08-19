@@ -34,8 +34,8 @@ plist_nonempty() {
   || fail "unexpected bundle identifier"
 plist_nonempty CFBundleShortVersionString
 BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO")"
-[[ "$BUILD_NUMBER" == <-> && "$BUILD_NUMBER" -gt 16 ]] \
-  || fail "CFBundleVersion must be an integer greater than uploaded build 16"
+[[ "$BUILD_NUMBER" == <-> && "$BUILD_NUMBER" -gt 17 ]] \
+  || fail "CFBundleVersion must be an integer greater than uploaded build 17"
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :LSApplicationCategoryType' "$INFO")" == "$EXPECTED_CATEGORY" ]] \
   || fail "LSApplicationCategoryType must be $EXPECTED_CATEGORY"
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$INFO")" == "$EXPECTED_ICON" ]] \
