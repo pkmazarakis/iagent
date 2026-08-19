@@ -165,6 +165,18 @@ final class MessageReplySourceContractTests: XCTestCase {
       controller.contains("messageProviderAccess = .disabled(error.localizedDescription)")
     )
     XCTAssertTrue(view.contains("copy the draft first, then retry after relaunch"))
+
+    let provider = try source("Sources/iAgentPanel/MessageInboxProvider.swift")
+    let inspectStart = try XCTUnwrap(provider.range(of: "private static func inspectAccess("))
+    let inspectEnd = try XCTUnwrap(
+      provider.range(
+        of: "private static func loadSnapshot(",
+        range: inspectStart.upperBound..<provider.endIndex
+      )
+    )
+    let inspection = String(provider[inspectStart.lowerBound..<inspectEnd.lowerBound])
+    XCTAssertTrue(inspection.contains("homeDirectory(forUser: userName)"))
+    XCTAssertFalse(inspection.contains("homeDirectoryForCurrentUser"))
   }
 
   func testProviderPublishesAddressesOnlyBehindDesktopOptIn() throws {

@@ -1521,10 +1521,9 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
           atPath: databaseURL.deletingLastPathComponent().path
         ),
         databaseIsAtDefaultMessagesLocation:
-          databaseURL.standardizedFileURL
-            == fileManager.homeDirectoryForCurrentUser
-              .appendingPathComponent("Library/Messages/chat.db")
-              .standardizedFileURL
+          accountMessagesDatabaseURL(fileManager: fileManager)
+            .map { databaseURL.standardizedFileURL == $0.standardizedFileURL }
+            ?? false
       )
     }
     guard fileManager.isReadableFile(atPath: databaseURL.path) else {
@@ -1560,6 +1559,14 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
       )
     }
     return .failed("The local Messages source could not be inspected safely.")
+  }
+
+  static func accountMessagesDatabaseURL(
+    fileManager: FileManager = .default,
+    userName: String = NSUserName()
+  ) -> URL? {
+    fileManager.homeDirectory(forUser: userName)?
+      .appendingPathComponent("Library/Messages/chat.db")
   }
 
   private static func loadSnapshot(

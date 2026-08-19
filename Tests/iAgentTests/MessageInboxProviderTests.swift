@@ -220,6 +220,26 @@ final class MessageInboxProviderTests: XCTestCase {
     XCTAssertTrue(message.contains("reconnect"))
   }
 
+  func testMessagesCanonicalPathUsesAccountHomeInsteadOfSandboxContainerHome() throws {
+    let accountHome = try XCTUnwrap(
+      FileManager.default.homeDirectory(forUser: NSUserName())
+    )
+    let expected = accountHome.appendingPathComponent("Library/Messages/chat.db")
+    let sandboxHome = accountHome.appendingPathComponent(
+      "Library/Containers/com.platon.iagent-panel/Data",
+      isDirectory: true
+    )
+
+    XCTAssertEqual(
+      LocalMacMessagesProvider.accountMessagesDatabaseURL(),
+      expected
+    )
+    XCTAssertNotEqual(
+      expected,
+      sandboxHome.appendingPathComponent("Library/Messages/chat.db")
+    )
+  }
+
   func testMessagesRecoveryChoosesFolderOnlyUntilSandboxBookmarkExists() {
     XCTAssertEqual(
       messageAccessRecoveryDestination(
