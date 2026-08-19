@@ -326,6 +326,21 @@ struct MessagesOutgoingVerifier: Sendable {
     return nil
   }
 
+  /// Detects the macOS 26 Messages failure mode where AppleScript returns
+  /// success but Messages writes an empty outgoing row that is not joined to
+  /// the intended chat. This is diagnostic only: it never enables a retry.
+  func unjoinedEmptyOutgoingRow(
+    context: MessagesOutgoingVerificationContext
+  ) -> Int64? {
+    guard let database = try? Self.openReadOnlyDatabase(at: context.databaseURL)
+    else { return nil }
+    defer { sqlite3_close(database) }
+    return try? Self.unjoinedEmptyOutgoingRow(
+      context: context,
+      in: database
+    )
+  }
+
   private static func openReadOnlyDatabase(at url: URL) throws -> OpaquePointer {
     var database: OpaquePointer?
     let flags = Int32(SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX)
@@ -476,6 +491,85 @@ struct MessagesOutgoingVerifier: Sendable {
     return nil
   }
 
+  private static func unjoinedEmptyOutgoingRow(
+    context: MessagesOutgoingVerificationContext,
+    in database: OpaquePointer
+  ) throws -> Int64? {
+    guard let expectedAddress = MessageReplyAddress(context.recipient) else {
+      return nil
+    }
+    let messageColumns = try columns(in: "message", database: database)
+    guard messageColumns.contains("handle_id"),
+          messageColumns.contains("is_from_me")
+    else { return nil }
+
+    let emptyPlainText = messageColumns.contains("text")
+      ? "LENGTH(COALESCE(m.text, '')) = 0"
+      : "1"
+    let emptyAttributedBody = messageColumns.contains("attributedBody")
+      ? "LENGTH(COALESCE(m.attributedBody, X'')) = 0"
+      : "1"
+    let hasNoAttachments = messageColumns.contains("cache_has_attachments")
+      ? "COALESCE(m.cache_has_attachments, 0) = 0"
+      : "1"
+    let sql = """
+      SELECT m.ROWID, COALESCE(h.id, '')
+      FROM message m
+      LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+      LEFT JOIN handle h ON h.ROWID = m.handle_id
+      WHERE m.ROWID > ?1
+        AND COALESCE(m.is_from_me, 0) = 1
+        AND cmj.message_id IS NULL
+        AND \(emptyPlainText)
+        AND \(emptyAttributedBody)
+        AND \(hasNoAttachments)
+      ORDER BY m.ROWID ASC
+      """
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+          let statement
+    else { throw MacMessageReplyTransportError.serviceUnavailable }
+    defer { sqlite3_finalize(statement) }
+    sqlite3_bind_int64(statement, 1, context.baselineRowID)
+
+    while sqlite3_step(statement) == SQLITE_ROW {
+      let rawHandle = string(at: 1, in: statement) ?? ""
+      guard ghostHandle(
+        rawHandle,
+        matches: expectedAddress,
+        chatGUID: context.chatGUID
+      ) else { continue }
+      return sqlite3_column_int64(statement, 0)
+    }
+    return nil
+  }
+
+  private static func ghostHandle(
+    _ rawValue: String,
+    matches expected: MessageReplyAddress,
+    chatGUID: String?
+  ) -> Bool {
+    let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return false }
+    if let chatGUID,
+       trimmed.caseInsensitiveCompare(chatGUID) == .orderedSame
+    {
+      return true
+    }
+    if routingAddress(trimmed, matches: expected) {
+      return true
+    }
+
+    let folded = trimmed.lowercased()
+    for prefix in ["any;+;", "any;-;"] where folded.hasPrefix(prefix) {
+      let bareHandle = String(trimmed.dropFirst(prefix.count))
+      if routingAddress(bareHandle, matches: expected) {
+        return true
+      }
+    }
+    return false
+  }
+
   private static func columns(
     in table: String,
     database: OpaquePointer
@@ -555,8 +649,8 @@ struct MessagesDirectSendPipeline: Sendable {
         )
       }
       guard let row = verifier.verify(body: payload.body, context: verification) else {
-        return .outcomeUncertain(
-          "Messages accepted the send, but no matching outgoing row appeared within \(Int(MessagesOutgoingVerifier.defaultTimeout)) seconds. The message may have sent; do not retry automatically."
+        return Self.missingVerificationResult(
+          ghostRowID: verifier.unjoinedEmptyOutgoingRow(context: verification)
         )
       }
       return .sent(
@@ -596,6 +690,19 @@ struct MessagesDirectSendPipeline: Sendable {
     }
     return .fallbackRequired(
       "\(detail) The direct send did not start, so you can open this draft in Messages instead."
+    )
+  }
+
+  static func missingVerificationResult(
+    ghostRowID: Int64?
+  ) -> MacMessageReplySendResult {
+    if let ghostRowID {
+      return .outcomeUncertain(
+        "Messages created an unjoined empty outgoing row (\(ghostRowID)) for this route, so delivery was not confirmed. Do not retry automatically."
+      )
+    }
+    return .outcomeUncertain(
+      "Messages accepted the send, but no matching outgoing row appeared within \(Int(MessagesOutgoingVerifier.defaultTimeout)) seconds. The message may have sent; do not retry automatically."
     )
   }
 }

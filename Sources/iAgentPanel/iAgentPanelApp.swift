@@ -486,6 +486,7 @@ final class PanelController: ObservableObject {
             guard oldValue != contentMode else { return }
             if oldValue == .messages, contentMode != .messages {
                 selectedMessageConversationID = nil
+                messageReplyDisplaySnapshot = nil
                 messageInboxFilter = .all
             }
             resizeExpandedPanel()
@@ -603,6 +604,10 @@ final class PanelController: ObservableObject {
     private var messageProviderTask: Task<Void, Never>?
     private var messageProviderRefreshGeneration = 0
     private var messageReplyDraftsByConversationID: [String: String] = [:]
+    private var messageReplyDisplaySnapshot: (
+        conversation: SyncedMessageConversation,
+        messages: [SyncedMessage]
+    )?
     private var todosAreAuthoritative = true
     private var todoListNamesAreAuthoritative = true
     private var todoFileIssue: String?
@@ -695,10 +700,31 @@ final class PanelController: ObservableObject {
     }
 
     func retainedMessages(for conversationID: String) -> [SyncedMessage] {
-        messageInboxIndex.retainedMessages(
+        let liveMessages = messageInboxIndex.retainedMessages(
             for: conversationID,
             referenceDate: referenceNow
         )
+        if !liveMessages.isEmpty {
+            return liveMessages
+        }
+        guard messageReplyDisplaySnapshot?.conversation.id == conversationID else {
+            return []
+        }
+        return messageReplyDisplaySnapshot?.messages ?? []
+    }
+
+    func messageConversationForDisplay(
+        _ conversationID: String
+    ) -> SyncedMessageConversation? {
+        if let liveConversation = visibleMessageConversations.first(where: {
+            $0.id == conversationID
+        }) {
+            return liveConversation
+        }
+        guard messageReplyDisplaySnapshot?.conversation.id == conversationID else {
+            return nil
+        }
+        return messageReplyDisplaySnapshot?.conversation
     }
 
     func unreadCount(for conversationID: String) -> Int {
@@ -1591,19 +1617,12 @@ final class PanelController: ObservableObject {
             reloadNotes()
         }
 
-        messageInboxIndex = MessageInboxIndex(
+        applyMessageProjection(
+            conversations: state.messageConversations,
             messages: state.messages,
-            readStates: state.messageReadStates
+            readStates: state.messageReadStates,
+            relayStates: state.messageRelayStates
         )
-        messageConversations = state.messageConversations
-        messages = state.messages
-        messageReadStates = state.messageReadStates
-        messageRelayStates = state.messageRelayStates
-        if let selectedMessageConversationID,
-           !visibleMessageConversations.contains(where: { $0.id == selectedMessageConversationID })
-        {
-            self.selectedMessageConversationID = nil
-        }
         noteCount = state.noteCount
         syncedCalendarEvents = state.calendarEvents
         syncedArtifactMentions = state.artifactMentions
@@ -1614,6 +1633,49 @@ final class PanelController: ObservableObject {
         }
         if contentMode == .messages {
             resizeExpandedPanel()
+        }
+    }
+
+    func applyMessageProjection(
+        conversations: [SyncedMessageConversation],
+        messages: [SyncedMessage],
+        readStates: [SyncedMessageReadState],
+        relayStates: [SyncedMessageRelayState]
+    ) {
+        messageInboxIndex = MessageInboxIndex(
+            messages: messages,
+            readStates: readStates
+        )
+        messageConversations = conversations
+        self.messages = messages
+        messageReadStates = readStates
+        messageRelayStates = relayStates
+
+        guard let selectedMessageConversationID else {
+            messageReplyDisplaySnapshot = nil
+            return
+        }
+
+        if messageReplyDisplaySnapshot?.conversation.id == selectedMessageConversationID,
+           let liveConversation = visibleMessageConversations.first(where: {
+               $0.id == selectedMessageConversationID
+           })
+        {
+            if messageReplySendInFlightConversationID == nil {
+                messageReplyDisplaySnapshot = nil
+            } else {
+                messageReplyDisplaySnapshot = (
+                    conversation: liveConversation,
+                    messages: messageInboxIndex.retainedMessages(
+                        for: selectedMessageConversationID,
+                        referenceDate: referenceNow
+                    )
+                )
+            }
+        }
+
+        if messageConversationForDisplay(selectedMessageConversationID) == nil {
+            self.selectedMessageConversationID = nil
         }
     }
 
@@ -1982,6 +2044,7 @@ final class PanelController: ObservableObject {
         guard messageReplySendInFlightConversationID == nil else { return }
         contentMode = .messages
         selectedMessageConversationID = nil
+        messageReplyDisplaySnapshot = nil
         messageInboxFilter = .all
         hoveredThreadID = nil
         statusMessage = nil
@@ -1991,6 +2054,9 @@ final class PanelController: ObservableObject {
         guard messageReplySendInFlightConversationID == nil
                 || messageReplySendInFlightConversationID == conversationID
         else { return }
+        if selectedMessageConversationID != conversationID {
+            messageReplyDisplaySnapshot = nil
+        }
         selectedMessageConversationID = conversationID
         guard let latest = retainedMessages(for: conversationID).last else { return }
         applyMessageReadStateLocally(conversationID: conversationID, through: latest)
@@ -2007,12 +2073,24 @@ final class PanelController: ObservableObject {
     func closeMessageConversation() {
         guard messageReplySendInFlightConversationID == nil else { return }
         selectedMessageConversationID = nil
+        messageReplyDisplaySnapshot = nil
     }
 
     func beginMessageReplySend(for conversationID: String) -> Bool {
         guard messageReplySendInFlightConversationID == nil,
               selectedMessageConversationID == conversationID
         else { return false }
+        if let conversation = visibleMessageConversations.first(where: {
+            $0.id == conversationID
+        }) {
+            messageReplyDisplaySnapshot = (
+                conversation: conversation,
+                messages: messageInboxIndex.retainedMessages(
+                    for: conversationID,
+                    referenceDate: referenceNow
+                )
+            )
+        }
         messageReplySendInFlightConversationID = conversationID
         return true
     }

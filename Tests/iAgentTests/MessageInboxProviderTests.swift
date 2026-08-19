@@ -664,6 +664,8 @@ final class MessageInboxProviderTests: XCTestCase {
     XCTAssertTrue(source.contains(".frame(height: MessageInboxLayout.conversationRowHeight)"))
     XCTAssertTrue(source.contains(".id(selectedConversation.id)"))
     XCTAssertTrue(source.contains(".transition(detailTransition)"))
+    XCTAssertTrue(source.contains("selectedConversation == nil"))
+    XCTAssertTrue(source.contains("controller.messageConversationForDisplay(selectedID)"))
   }
 
   @MainActor
@@ -702,6 +704,66 @@ final class MessageInboxProviderTests: XCTestCase {
     controller.finishMessageReplySend(for: "conversation-a")
     controller.closeMessageConversation()
     XCTAssertNil(controller.selectedMessageConversationID)
+  }
+
+  @MainActor
+  func testAutomaticMessageRefreshPreservesInFlightConversationForSendResult() {
+    let controller = PanelController(
+      smokeTest: true,
+      preferences: isolatedPreferences()
+    )
+    let sentAt = controller.referenceNow
+    let conversation = SyncedMessageConversation(
+      id: "conversation-a",
+      displayName: "Avery Chen",
+      participants: [],
+      isGroup: false,
+      latestMessageID: "message-a",
+      latestMessageDate: sentAt,
+      latestPreview: "Ready to send",
+      updatedAt: sentAt
+    )
+    let message = SyncedMessage(
+      id: "message-a",
+      conversationID: conversation.id,
+      isFromMe: false,
+      body: "Ready to send",
+      sentAt: sentAt,
+      updatedAt: sentAt
+    )
+
+    controller.applyMessageProjection(
+      conversations: [conversation],
+      messages: [message],
+      readStates: [],
+      relayStates: []
+    )
+    controller.selectedMessageConversationID = conversation.id
+    XCTAssertTrue(controller.beginMessageReplySend(for: conversation.id))
+
+    controller.applyMessageProjection(
+      conversations: [],
+      messages: [],
+      readStates: [],
+      relayStates: []
+    )
+
+    XCTAssertEqual(controller.selectedMessageConversationID, conversation.id)
+    XCTAssertEqual(
+      controller.messageConversationForDisplay(conversation.id),
+      conversation
+    )
+    XCTAssertEqual(controller.retainedMessages(for: conversation.id), [message])
+
+    controller.finishMessageReplySend(for: conversation.id)
+    XCTAssertEqual(
+      controller.messageConversationForDisplay(conversation.id),
+      conversation
+    )
+
+    controller.closeMessageConversation()
+    XCTAssertNil(controller.selectedMessageConversationID)
+    XCTAssertNil(controller.messageConversationForDisplay(conversation.id))
   }
 
   func testFullDiskAccessSettingsURLTargetsModernPrivacySettingsExtension() throws {

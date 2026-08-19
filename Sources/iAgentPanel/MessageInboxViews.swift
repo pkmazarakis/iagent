@@ -57,7 +57,9 @@ struct MessageInboxView: View {
 
     var body: some View {
         Group {
-            if controller.visibleMessageConversations.isEmpty {
+            if controller.visibleMessageConversations.isEmpty,
+               selectedConversation == nil
+            {
                 availabilityState
             } else {
                 splitInbox
@@ -298,7 +300,7 @@ struct MessageInboxView: View {
 
     private var selectedConversation: SyncedMessageConversation? {
         guard let selectedID = controller.selectedMessageConversationID else { return nil }
-        return controller.visibleMessageConversations.first { $0.id == selectedID }
+        return controller.messageConversationForDisplay(selectedID)
     }
 
 }

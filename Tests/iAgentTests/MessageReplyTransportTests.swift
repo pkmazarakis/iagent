@@ -79,6 +79,24 @@ final class MessageReplyTransportTests: XCTestCase {
     }
   }
 
+  func testMissingVerificationKeepsGhostRowDiagnosticUncertain() {
+    guard case .outcomeUncertain(let ghostMessage) = MessagesDirectSendPipeline
+      .missingVerificationResult(ghostRowID: 77)
+    else {
+      return XCTFail("A ghost row must remain an uncertain no-retry outcome")
+    }
+    XCTAssertTrue(ghostMessage.contains("unjoined empty outgoing row (77)"))
+    XCTAssertTrue(ghostMessage.lowercased().contains("do not retry automatically"))
+
+    guard case .outcomeUncertain(let genericMessage) = MessagesDirectSendPipeline
+      .missingVerificationResult(ghostRowID: nil)
+    else {
+      return XCTFail("Missing verification without a ghost row must remain uncertain")
+    }
+    XCTAssertTrue(genericMessage.contains("no matching outgoing row"))
+    XCTAssertTrue(genericMessage.lowercased().contains("do not retry automatically"))
+  }
+
   @MainActor
   func testInjectedTransportPreservesDistinctSendResults() async throws {
     let request = try Self.makeRequest()
@@ -181,6 +199,45 @@ final class MessageReplyTransportTests: XCTestCase {
     XCTAssertEqual(row.guid, "verified-guid")
   }
 
+  func testOutgoingVerifierDiagnosesOnlyRouteMatchedUnjoinedEmptyRows() throws {
+    let fixture = try MessagesVerificationFixture()
+    defer { fixture.remove() }
+    let verifier = MessagesOutgoingVerifier(
+      databaseURL: fixture.databaseURL,
+      verificationTimeout: 0
+    )
+    let context = try XCTUnwrap(
+      verifier.prepare(recipient: "+15551234567", service: .iMessage)
+    )
+
+    try fixture.execute(
+      """
+      INSERT INTO message(
+        ROWID, guid, text, date, is_from_me, handle_id, cache_has_attachments
+      ) VALUES (6, 'other-route', '', 200, 1, 2, 0);
+
+      INSERT INTO message(
+        ROWID, guid, text, date, is_from_me, handle_id, cache_has_attachments
+      ) VALUES (7, 'joined-empty', '', 201, 1, 1, 0);
+      INSERT INTO chat_message_join(chat_id, message_id) VALUES (1, 7);
+
+      INSERT INTO message(
+        ROWID, guid, text, date, is_from_me, handle_id, cache_has_attachments
+      ) VALUES (8, 'attachment-send', '', 202, 1, 1, 1);
+      """
+    )
+    XCTAssertNil(verifier.unjoinedEmptyOutgoingRow(context: context))
+
+    try fixture.execute(
+      """
+      INSERT INTO message(
+        ROWID, guid, text, date, is_from_me, handle_id, cache_has_attachments
+      ) VALUES (9, 'route-ghost', '', 203, 1, 1, 0);
+      """
+    )
+    XCTAssertEqual(verifier.unjoinedEmptyOutgoingRow(context: context), 9)
+  }
+
   private static func makeRequest() throws -> MessageReplyRequest {
     let participant = SyncedMessageParticipant(
       id: "recipient",
@@ -239,8 +296,11 @@ private final class MessagesVerificationFixture {
         ROWID INTEGER PRIMARY KEY,
         guid TEXT,
         text TEXT,
+        attributedBody BLOB,
         date INTEGER,
-        is_from_me INTEGER
+        is_from_me INTEGER,
+        handle_id INTEGER,
+        cache_has_attachments INTEGER DEFAULT 0
       );
       CREATE TABLE chat_message_join(chat_id INTEGER, message_id INTEGER);
 
