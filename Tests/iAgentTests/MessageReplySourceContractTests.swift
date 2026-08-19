@@ -133,6 +133,8 @@ final class MessageReplySourceContractTests: XCTestCase {
 
   func testSandboxMessagesSelectionSurvivesTheSeparatePrivacyGate() throws {
     let sandbox = try source("Sources/iAgentPanel/SandboxAccessManager.swift")
+    let controller = try source("Sources/iAgentPanel/iAgentPanelApp.swift")
+    let view = try source("Sources/iAgentPanel/MessageInboxViews.swift")
     let restoreStart = try XCTUnwrap(
       sandbox.range(of: "func restoreMessagesAccessIfEnabled(")
     )
@@ -159,6 +161,10 @@ final class MessageReplySourceContractTests: XCTestCase {
     XCTAssertTrue(request.contains("defaults.set(data, forKey: Key.messages)"))
     XCTAssertTrue(request.contains("messagesDirectoryURL = directoryURL"))
     XCTAssertFalse(request.contains("validatedMessagesDatabaseURL"))
+    XCTAssertTrue(
+      controller.contains("messageProviderAccess = .disabled(error.localizedDescription)")
+    )
+    XCTAssertTrue(view.contains("copy the draft first, then retry after relaunch"))
   }
 
   func testProviderPublishesAddressesOnlyBehindDesktopOptIn() throws {

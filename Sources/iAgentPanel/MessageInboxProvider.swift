@@ -1514,11 +1514,17 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
       Darwin.lstat(path, &metadata)
     }
     if probeResult != 0 {
+      let probeError = errno
       return accessStateForFailedDatabaseProbe(
-        errorNumber: errno,
+        errorNumber: probeError,
         directoryIsReadable: fileManager.isReadableFile(
           atPath: databaseURL.deletingLastPathComponent().path
-        )
+        ),
+        databaseIsAtDefaultMessagesLocation:
+          databaseURL.standardizedFileURL
+            == fileManager.homeDirectoryForCurrentUser
+              .appendingPathComponent("Library/Messages/chat.db")
+              .standardizedFileURL
       )
     }
     guard fileManager.isReadableFile(atPath: databaseURL.path) else {
@@ -1539,17 +1545,18 @@ final class LocalMacMessagesProvider: MacMessageProviding, @unchecked Sendable {
 
   static func accessStateForFailedDatabaseProbe(
     errorNumber: Int32,
-    directoryIsReadable: Bool
+    directoryIsReadable: Bool,
+    databaseIsAtDefaultMessagesLocation: Bool = false
   ) -> MessageProviderAccessState {
     if errorNumber == EACCES || errorNumber == EPERM {
       return .permissionRequired(permissionMessage)
     }
     if errorNumber == ENOENT {
-      if !directoryIsReadable {
+      if !directoryIsReadable || databaseIsAtDefaultMessagesLocation {
         return .permissionRequired(permissionMessage)
       }
-      return .failed(
-        "The local Messages database was not found. Open Messages on this Mac and try again."
+      return .disabled(
+        "The local Messages database was not found. Open Messages on this Mac, then reconnect and choose its Messages folder."
       )
     }
     return .failed("The local Messages source could not be inspected safely.")

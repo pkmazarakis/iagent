@@ -198,15 +198,26 @@ final class MessageInboxProviderTests: XCTestCase {
       return XCTFail("An unreadable Messages directory must require privacy access")
     }
 
-    guard case let .failed(message) = LocalMacMessagesProvider
+    guard case .permissionRequired = LocalMacMessagesProvider
+      .accessStateForFailedDatabaseProbe(
+        errorNumber: ENOENT,
+        directoryIsReadable: true,
+        databaseIsAtDefaultMessagesLocation: true
+      )
+    else {
+      return XCTFail("The canonical Messages path can be hidden by the privacy gate")
+    }
+
+    guard case let .disabled(message) = LocalMacMessagesProvider
       .accessStateForFailedDatabaseProbe(
         errorNumber: ENOENT,
         directoryIsReadable: true
       )
     else {
-      return XCTFail("A genuinely missing chat.db should be a source failure")
+      return XCTFail("A wrong or genuinely empty Messages folder must be reconnectable")
     }
     XCTAssertTrue(message.contains("was not found"))
+    XCTAssertTrue(message.contains("reconnect"))
   }
 
   func testMessagesRecoveryChoosesFolderOnlyUntilSandboxBookmarkExists() {
@@ -887,7 +898,7 @@ final class MessageInboxProviderTests: XCTestCase {
     XCTAssertEqual(loadCount.value, 3)
   }
 
-  func testLocalProviderReportsMissingReadableDatabaseAsFailure() async {
+  func testLocalProviderKeepsMissingReadableDatabaseReconnectable() async {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent(
         "iagent-message-provider-missing-\(UUID().uuidString)", isDirectory: true)
@@ -899,10 +910,11 @@ final class MessageInboxProviderTests: XCTestCase {
       contactNameResolver: StubContactNameResolver()
     )
     let status = await provider.authorizationStatus()
-    guard case .failed(let message) = status else {
-      return XCTFail("Expected a missing readable Messages source to fail, got \(status)")
+    guard case .disabled(let message) = status else {
+      return XCTFail("Expected a missing readable Messages source to reconnect, got \(status)")
     }
     XCTAssertTrue(message.contains("not found"))
+    XCTAssertTrue(message.contains("reconnect"))
   }
 
   private func makeMessagesFixture(

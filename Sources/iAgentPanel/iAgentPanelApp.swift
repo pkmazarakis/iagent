@@ -1295,12 +1295,7 @@ final class PanelController: ObservableObject {
                 else { return }
                 authorizedDatabaseURL = selectedDatabaseURL
             } catch let error as SandboxMessagesAccessError {
-                switch error {
-                case .invalidMessagesDirectory:
-                    messageProviderAccess = .disabled(error.localizedDescription)
-                case .securityScopeUnavailable, .bookmarkCreationFailed:
-                    messageProviderAccess = .failed(error.localizedDescription)
-                }
+                messageProviderAccess = .disabled(error.localizedDescription)
                 Task { [weak self] in
                     guard let self else { return }
                     let state = await self.desktopSync.publishMessageRelayState(

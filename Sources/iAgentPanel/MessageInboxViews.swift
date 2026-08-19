@@ -796,7 +796,7 @@ private struct MessageConversationPage: View {
     }
 
     private func accessPrompt(_ detail: String) -> String {
-        "\(detail)\n\nYour draft stays here. After access is granted, iAgent will continue preparing it for review in Messages."
+        "\(detail)\n\nYour draft stays here while iAgent remains open. If macOS requires a relaunch after you change Full Disk Access, copy the draft first, then retry after relaunch."
     }
 
     private func prepareHandoffConfirmation() {
